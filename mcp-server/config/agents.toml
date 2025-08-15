@@ -1,0 +1,67 @@
+[workflow]
+max_total_iterations = 7
+timeout_minutes = 15
+
+[agents.engineering_manager]
+role = "engineering_manager"
+model = "qwen3:14b-q4_K_M"
+max_iterations = 2
+tools = ["read_file", "git_status", "git_log"]
+
+[agents.senior_engineer]
+role = "senior_engineer" 
+model = "qwen3:14b-q4_K_M"
+max_iterations = 3
+tools = ["read_file", "write_file", "execute_command", "git_diff"]
+
+[agents.senior_qa]
+role = "senior_qa"
+model = "qwen3:14b-q4_K_M" 
+max_iterations = 2
+tools = ["read_file", "write_file", "execute_command", "git_diff"]
+
+[agents.senior_tech_lead]
+role = "senior_tech_lead"
+model = "qwen3:14b-q4_K_M"
+max_iterations = 2
+tools = ["read_file", "write_file", "execute_command", "git_diff", "http_request"]
+
+# Command restrictions remain the same as existing agent.toml
+[commands]
+allowed = [
+    # Go commands
+    "go build", "go test", "go fmt", "go vet", "go mod tidy", "go run",
+    "go build ./...", "go test ./...", "go mod download", "go mod init",
+    
+    # Node.js commands  
+    "npm install", "npm run build", "npm test", "npm run dev",
+    "npm ci", "yarn install", "yarn build", "yarn test",
+    "npm run lint", "npm audit",
+    
+    # Python commands
+    "python -m pytest", "python -m pip install", "python setup.py",
+    "pip install", "pytest", "python -m venv",
+    "python -m flake8", "python -m black --check",
+    
+    # Build tools
+    "make", "make build", "make test", "make clean",
+    
+    # Git operations
+    "git add", "git status", "git diff", "git log --oneline -10",
+    "git log --oneline", "git show", "git branch",
+    
+    # File operations
+    "ls", "cat", "head", "tail", "find", "grep",
+    "mkdir", "touch", "cp", "mv"
+]
+
+[restrictions]
+blocked_patterns = [
+    "sudo", "rm -rf", "chmod +x", "systemctl", 
+    "iptables", "mount", "cd /", "cat /etc/",
+    "passwd", "usermod", "userdel", "groupmod",
+    "service", "systemd", "crontab", "at",
+    "wget", "curl http", "curl https", "ssh",
+    "scp", "rsync", "dd", "fdisk", "mkfs",
+    "chown", "chgrp", "umount", "kill -9"
+]

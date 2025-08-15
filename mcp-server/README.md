@@ -59,7 +59,7 @@ Configuration is loaded from `/app/config/agent.toml`:
 ```toml
 [agent]
 role = "senior_engineer"
-model = "qwen3:14b"
+model = "qwen3:14b-q4_K_M"
 max_tokens = 4000
 
 [commands]

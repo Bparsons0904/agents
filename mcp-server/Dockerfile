@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
@@ -14,6 +14,9 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Copy config files to the image
+COPY config/ ./config/
+
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o mcp-server ./cmd/mcp-server
 
@@ -24,11 +27,14 @@ RUN apk --no-cache add ca-certificates git curl
 
 WORKDIR /app
 
+# Create directories for projects and config
+RUN mkdir -p /app/projects /app/config
+
 # Copy the binary from builder
 COPY --from=builder /app/mcp-server .
 
-# Create directories for projects and config
-RUN mkdir -p /app/projects /app/config
+# Copy config files from builder
+COPY --from=builder /app/config/ ./config/
 
 # Expose the MCP server port
 EXPOSE 8080

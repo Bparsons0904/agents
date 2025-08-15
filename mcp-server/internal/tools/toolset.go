@@ -42,6 +42,30 @@ func (ts *ToolSet) GetGitDiff() (string, error) {
 	return ts.git.GetDiff()
 }
 
+func (ts *ToolSet) GetGitLog(limit int) (string, error) {
+	return ts.git.GetLog(limit)
+}
+
+func (ts *ToolSet) GetGitDiffNameOnly() (string, error) {
+	return ts.git.GetDiffNameOnly()
+}
+
+func (ts *ToolSet) GetGitDiffCached() (string, error) {
+	return ts.git.GetDiffCached()
+}
+
+func (ts *ToolSet) GetGitShow(commitHash string) (string, error) {
+	return ts.git.GetShow(commitHash)
+}
+
+func (ts *ToolSet) GetGitBranch() (string, error) {
+	return ts.git.GetBranch()
+}
+
+func (ts *ToolSet) IsGitRepo() bool {
+	return ts.git.IsGitRepo()
+}
+
 func (ts *ToolSet) SetWorkingDirectory(dir string) {
 	ts.workingDir = dir
 	ts.filesystem = NewFileSystem(dir)

@@ -174,12 +174,6 @@ func (se *SeniorEngineer) executeImplementation(ctx context.Context, req Impleme
 	return result, nil
 }
 
-type Action struct {
-	Type    string
-	Path    string
-	Content string
-	Command string
-}
 
 func (se *SeniorEngineer) parseActions(response string) []Action {
 	var actions []Action

@@ -1,7 +1,11 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
+// Project and Agent Types
 type ProjectType string
 
 const (
@@ -10,6 +14,16 @@ const (
 	ProjectTypePython     ProjectType = "python"
 )
 
+type AgentRole string
+
+const (
+	AgentRoleEM           AgentRole = "engineering_manager"
+	AgentRoleEngineer     AgentRole = "senior_engineer"
+	AgentRoleQA           AgentRole = "senior_qa"
+	AgentRoleTechLead     AgentRole = "senior_tech_lead"
+)
+
+// Request and Response Types
 type ImplementFeatureRequest struct {
 	Description      string      `json:"description"`
 	ProjectType      ProjectType `json:"project_type"`
@@ -26,8 +40,50 @@ type ImplementFeatureResponse struct {
 	Error            string   `json:"error,omitempty"`
 }
 
+// Workflow Types
+type WorkflowRequest struct {
+	Description      string      `json:"description"`
+	ProjectType      ProjectType `json:"project_type"`
+	WorkingDirectory string      `json:"working_directory"`
+}
+
+type WorkflowResult struct {
+	Success          bool                        `json:"success"`
+	CompletedPhases  []string                    `json:"completed_phases"`
+	FilesModified    []string                    `json:"files_modified"`
+	TestsAdded       []string                    `json:"tests_added"`
+	QualityChecks    []string                    `json:"quality_checks"`
+	BuildOutput      string                      `json:"build_output"`
+	AgentSummaries   map[string]AgentSummary     `json:"agent_summaries"`
+	WorkflowHistory  []AgentTransition           `json:"workflow_history"`
+	NextSteps        string                      `json:"next_steps"`
+	Error            string                      `json:"error,omitempty"`
+	FailureReason    string                      `json:"failure_reason,omitempty"`
+}
+
+type AgentSummary struct {
+	Role           string   `json:"role"`
+	TaskCompleted  string   `json:"task_completed"`
+	FilesChanged   []string `json:"files_changed"`
+	Iterations     int      `json:"iterations"`
+	Success        bool     `json:"success"`
+}
+
+type AgentTransition struct {
+	FromAgent AgentRole `json:"from_agent"`
+	ToAgent   AgentRole `json:"to_agent"`
+	Reason    string    `json:"reason"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// Core Interfaces
 type Agent interface {
 	ImplementFeature(ctx context.Context, req ImplementFeatureRequest) (*ImplementFeatureResponse, error)
+}
+
+type WorkflowOrchestrator interface {
+	ExecuteWorkflow(ctx context.Context, req WorkflowRequest) (*WorkflowResult, error)
+	RegisterAgent(role AgentRole, agent Agent)
 }
 
 type LLMClient interface {
@@ -40,10 +96,16 @@ type ToolSet interface {
 	ExecuteCommand(command string) (string, error)
 	GetGitStatus() (string, error)
 	GetGitDiff() (string, error)
+	GetGitLog(limit int) (string, error)
 	SetWorkingDirectory(dir string)
 }
 
 type CommandRestrictions interface {
 	IsAllowed(command string) bool
 	ValidateCommand(command string) error
+}
+
+// Agent Factory Interface
+type AgentFactory interface {
+	CreateAgent(role AgentRole, llmClient LLMClient, toolSet ToolSet, restrictions CommandRestrictions) (Agent, error)
 }
