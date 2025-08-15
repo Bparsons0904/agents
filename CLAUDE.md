@@ -15,6 +15,7 @@ This is a fully implemented MCP (Model Context Protocol) server featuring a mult
 ## Key Components
 
 ### MCP Server Structure
+
 ```
 mcp-server/
 ├── cmd/mcp-server/          # HTTP server entry point
@@ -31,6 +32,7 @@ mcp-server/
 ```
 
 ### Important Files
+
 - `docker-compose.yml`: Service orchestration with health checks
 - `mcp-server/config/agents.toml`: Multi-agent workflow configuration
 - `mcp-server/config/agent.toml`: Legacy single-agent configuration
@@ -39,6 +41,7 @@ mcp-server/
 - `mcp-server/README.md`: Implementation documentation
 
 ### Multi-Agent Workflow
+
 The system implements a complete software development workflow:
 
 1. **Engineering Manager**: Analyzes requirements, reads project context (CLAUDE.md, AGENTS.md), creates implementation plans
@@ -52,18 +55,21 @@ The system implements a complete software development workflow:
 ## Development Guidelines
 
 ### Go Code Standards
+
 - Use camelCase for file names (per user preference)
 - Follow existing patterns in agent/ and tools/ packages
 - Implement proper error handling with context
 - Use interfaces for testability (LLMClient, ToolSet, CommandRestrictions)
 
 ### Security Requirements
+
 - ALL commands must be validated against allowlist in `agent.toml`
 - File operations restricted to project directory scope
 - No sudo, rm -rf, or system-level operations allowed
 - Path traversal protection for all file access
 
 ### Configuration Management
+
 - Use TOML for all configuration files
 - Support both file-based and environment variable configuration
 - Graceful fallbacks to sensible defaults
@@ -72,15 +78,16 @@ The system implements a complete software development workflow:
 ## Commands and Operations
 
 ### Docker Management
+
 ```bash
 # Start Ollama only (for model downloads)
-docker-compose up ollama
+docker compose up ollama
 
 # Start both services
-docker-compose up
+docker compose up
 
 # Build MCP server only
-docker-compose build mcp-server
+docker compose build mcp-server
 
 # View logs
 docker logs agent-ollama
@@ -88,6 +95,7 @@ docker logs agent-mcp-server
 ```
 
 ### Testing Commands
+
 ```bash
 # Health checks
 curl http://localhost:11434/api/tags    # Ollama
@@ -125,6 +133,7 @@ curl -X POST http://localhost:8080/call -H "Content-Type: application/json" -d '
 ## Current State
 
 ### Completed Features ✅
+
 - **Multi-Agent MCP Server**: Full workflow orchestration system
 - **Four Specialized Agents**: Engineering Manager, Senior Engineer, Senior QA, Senior Tech Lead
 - **Smart Routing Engine**: Dynamic agent transitions with 20+ decision rules
@@ -138,6 +147,7 @@ curl -X POST http://localhost:8080/call -H "Content-Type: application/json" -d '
 - **Error Recovery**: Iteration limits, timeout handling, workflow diagnostics
 
 ### Model Status
+
 - **Ollama Integration**: Qwen3:14b-q4_K_M model fully operational
 - **Model Size**: ~9GB, downloads on first startup
 - **Health Status**: All agents operational, 4 registered agents
@@ -145,6 +155,7 @@ curl -X POST http://localhost:8080/call -H "Content-Type: application/json" -d '
 - **Performance**: Successful multi-agent workflow execution (tested)
 
 ### Testing Results
+
 - **Multi-Agent Workflow**: Successfully tested with Product Manager feature request
 - **Execution Time**: ~2m 8s for complete EM → Engineer workflow
 - **Code Generation**: Functional Go Fiber web server with health endpoint created
@@ -154,6 +165,7 @@ curl -X POST http://localhost:8080/call -H "Content-Type: application/json" -d '
 ## Future Enhancements
 
 ### Potential Enhancements
+
 1. **Iteration Limit Tuning**: Increase per-agent limits for complex features
 2. **Full Workflow Completion**: QA and Tech Lead integration for complete pipeline
 3. **Performance Optimization**: Parallel agent execution where possible
@@ -161,6 +173,7 @@ curl -X POST http://localhost:8080/call -H "Content-Type: application/json" -d '
 5. **Workspace Management**: Multi-project support and isolation
 
 ### Integration Points
+
 - Claude Code MCP client integration
 - VS Code extension support
 - CI/CD pipeline integration
@@ -169,12 +182,14 @@ curl -X POST http://localhost:8080/call -H "Content-Type: application/json" -d '
 ## Troubleshooting
 
 ### Common Issues
+
 1. **Ollama "unhealthy"**: Normal during model download, wait for completion
 2. **MCP build failures**: Check Go module dependencies with `go mod tidy`
 3. **Command restrictions**: Verify allowlist in `config/agent.toml`
 4. **File access denied**: Ensure paths are within project directory
 
 ### Debug Commands
+
 ```bash
 # Check container status
 docker ps -a
@@ -190,12 +205,14 @@ docker exec agent-ollama ollama list
 ## Important Notes
 
 ### Security Considerations
+
 - This is a development/testing environment
 - Production deployments need additional security hardening
 - GPU access required for optimal Ollama performance
 - Network isolation recommended for production
 
 ### Performance
+
 - **Model**: Qwen3:14b-q4_K_M requires ~9GB VRAM for optimal performance
 - **Workflow Duration**: 2-5 minutes for typical multi-agent features
 - **Memory Usage**: Efficient quantized model (q4_K_M) for resource optimization
@@ -203,6 +220,8 @@ docker exec agent-ollama ollama list
 - **Scaling**: Consider qwen3:8b for systems with limited VRAM
 
 ### Claude Code Integration
+
 - Server runs on port 8080 for MCP protocol communication
 - Standard JSON-RPC format for tool calls
 - Designed for integration with Claude Code's MCP client
+

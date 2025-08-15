@@ -16,6 +16,16 @@ type SeniorEngineer struct {
 	config       config.WorkflowAgentConfig // Agent-specific config
 }
 
+// EMBrief represents a structured briefing from the Engineering Manager
+type EMBrief struct {
+	Task                   string
+	Context                string
+	FilesToExamine         []string
+	ImplementationApproach string
+	PotentialIssues        []string
+	SuccessCriteria        string
+}
+
 func NewSeniorEngineer(
 	llmClient LLMClient,
 	tools ToolSet,
@@ -131,6 +141,9 @@ func (se *SeniorEngineer) buildSystemPrompt(
 	req ImplementFeatureRequest,
 	gitStatus, lastError string,
 ) string {
+	// Parse EM brief first
+	emBrief := se.parseEMBrief(req.Description)
+	
 	correctionPrompt := ""
 	if lastError != "" {
 		correctionPrompt = fmt.Sprintf(`
@@ -142,10 +155,56 @@ Your last attempt failed with the following error. Analyze the error and the cod
 `, lastError)
 	}
 
-	return fmt.Sprintf(
-		`You are a Senior Software Engineer focused on implementing high-quality code.
+	// Build briefing section based on parsed EM brief
+	briefingSection := ""
+	if emBrief.Task != "" {
+		briefingSection = fmt.Sprintf(`
+**ENGINEERING MANAGER'S BRIEF:**
+Task: %s
+Project Context: %s
+Suggested Approach: %s
+Files to Examine: %s
+Known Issues to Avoid: %s
+Success Criteria: %s
 
-**Current Task:** %s
+**YOUR IMPLEMENTATION STRATEGY:**
+1. FIRST: Read the files suggested by your EM to understand existing patterns
+2. THEN: Explore project structure if needed (LIST_FILES, FIND_FILES)
+3. FINALLY: Implement following the suggested approach
+
+**Implementation Guidelines:**
+- Follow the EM's suggested approach unless you find a compelling reason not to
+- If you deviate from the EM's suggestion, document why in your actions
+- Read the suggested files BEFORE implementing to understand patterns
+- Use existing project patterns and conventions
+`, 
+			emBrief.Task, 
+			emBrief.Context, 
+			emBrief.ImplementationApproach,
+			strings.Join(emBrief.FilesToExamine, ", "), 
+			strings.Join(emBrief.PotentialIssues, ", "), 
+			emBrief.SuccessCriteria)
+	} else {
+		// Fallback for non-structured descriptions
+		briefingSection = fmt.Sprintf(`
+**TASK DESCRIPTION:**
+%s
+
+**YOUR IMPLEMENTATION STRATEGY:**
+1. FIRST: Explore the project structure to understand existing patterns
+2. THEN: Read relevant files to understand conventions
+3. FINALLY: Implement the requested feature
+
+**Implementation Guidelines:**
+- Analyze the project structure before implementing
+- Follow existing code patterns and conventions
+- Use proper error handling and best practices
+`, req.Description)
+	}
+
+	return fmt.Sprintf(
+		`You are a Senior Software Engineer implementing a feature based on your Engineering Manager's brief.
+%s
 **Project Type:** %s
 **Working Directory:** %s
 %s
@@ -200,14 +259,8 @@ ACTION: FIND_FILES
 PATTERN: filename_pattern
 SEARCH_PATH: directory/to/search (optional)
 
-IMPORTANT: You MUST start by exploring the project structure before attempting to read any files. 
-
-First, use ACTION: LIST_FILES with PATH: . to see the project root, then explore subdirectories.
-Use ACTION: FIND_FILES to locate specific file types (e.g., PATTERN: .go, PATTERN: handler, etc.).
-Only after understanding the structure should you read existing files and implement changes.
-
-Begin by analyzing the current project structure and implementing the requested feature.`,
-		req.Description,
+Begin by following your implementation strategy and implementing the requested feature.`,
+		briefingSection,
 		req.ProjectType,
 		req.WorkingDirectory,
 		correctionPrompt,
@@ -418,6 +471,20 @@ func (se *SeniorEngineer) getBuildCommand(projectType ProjectType) string {
 func (se *SeniorEngineer) categorizeError(errorMsg string) string {
 	errorLower := strings.ToLower(errorMsg)
 	
+	// EM feedback indicators - these suggest broader issues that EM should address
+	if strings.Contains(errorLower, "approach") || strings.Contains(errorLower, "architecture") {
+		return "approach_issue" // Should go back to EM
+	}
+	if strings.Contains(errorLower, "pattern") || strings.Contains(errorLower, "convention") {
+		return "pattern_mismatch" // Should go back to EM
+	}
+	if strings.Contains(errorLower, "project structure") || strings.Contains(errorLower, "organization") {
+		return "structure_issue" // Should go back to EM
+	}
+	if strings.Contains(errorLower, "missing dependency") || strings.Contains(errorLower, "setup") {
+		return "setup_issue" // Should go back to EM
+	}
+	
 	// Go-specific compilation errors
 	if strings.Contains(errorLower, "imported and not used") {
 		return "unused_import"
@@ -467,6 +534,18 @@ func (se *SeniorEngineer) categorizeError(errorMsg string) string {
 	return "unknown_error"
 }
 
+// shouldEscalateToEM determines if an error should be escalated back to the Engineering Manager
+func (se *SeniorEngineer) shouldEscalateToEM(errorCategory string) bool {
+	escalationCategories := map[string]bool{
+		"approach_issue":    true,
+		"pattern_mismatch":  true,
+		"structure_issue":   true,
+		"setup_issue":       true,
+	}
+	
+	return escalationCategories[errorCategory]
+}
+
 // isStuckOnSameError checks if the engineer is stuck on the same or similar error (legacy method, kept for compatibility)
 func (se *SeniorEngineer) isStuckOnSameError(currentError, lastError string) bool {
 	if lastError == "" {
@@ -475,6 +554,45 @@ func (se *SeniorEngineer) isStuckOnSameError(currentError, lastError string) boo
 	
 	// Use the new categorization system
 	return se.categorizeError(currentError) == se.categorizeError(lastError)
+}
+
+// parseEMBrief extracts structured briefing information from the EM's task description
+func (se *SeniorEngineer) parseEMBrief(description string) *EMBrief {
+	brief := &EMBrief{}
+	lines := strings.Split(description, "\n")
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "TASK:") {
+			brief.Task = strings.TrimSpace(strings.TrimPrefix(line, "TASK:"))
+		} else if strings.HasPrefix(line, "CONTEXT:") {
+			brief.Context = strings.TrimSpace(strings.TrimPrefix(line, "CONTEXT:"))
+		} else if strings.HasPrefix(line, "FILES_TO_EXAMINE:") {
+			filesStr := strings.TrimSpace(strings.TrimPrefix(line, "FILES_TO_EXAMINE:"))
+			if filesStr != "" {
+				files := strings.Split(filesStr, ",")
+				for i, file := range files {
+					files[i] = strings.TrimSpace(file)
+				}
+				brief.FilesToExamine = files
+			}
+		} else if strings.HasPrefix(line, "IMPLEMENTATION_APPROACH:") {
+			brief.ImplementationApproach = strings.TrimSpace(strings.TrimPrefix(line, "IMPLEMENTATION_APPROACH:"))
+		} else if strings.HasPrefix(line, "POTENTIAL_ISSUES:") {
+			issuesStr := strings.TrimSpace(strings.TrimPrefix(line, "POTENTIAL_ISSUES:"))
+			if issuesStr != "" {
+				issues := strings.Split(issuesStr, ",")
+				for i, issue := range issues {
+					issues[i] = strings.TrimSpace(issue)
+				}
+				brief.PotentialIssues = issues
+			}
+		} else if strings.HasPrefix(line, "SUCCESS_CRITERIA:") {
+			brief.SuccessCriteria = strings.TrimSpace(strings.TrimPrefix(line, "SUCCESS_CRITERIA:"))
+		}
+	}
+	
+	return brief
 }
 
 // DocumentTask for SeniorEngineer is a no-op

@@ -150,13 +150,23 @@ func (em *EngineeringManager) buildSystemPrompt(req ImplementFeatureRequest, con
 
 **Your Task:**
 1. **FIRST:** Analyze if project cleanup is needed (package conflicts, file organization)
-2. **THEN:** Create a revised task for the Senior Engineer
+2. **THEN:** Create a revised structured brief for the Senior Engineer
 
 If project cleanup is needed, use EXECUTE_COMMAND actions to:
 - Remove conflicting files
 - Create proper directory structure  
 - Initialize project files (go.mod, etc.)
 - Organize files into appropriate locations
+
+**REVISED IMPLEMENTATION BRIEF FORMAT:**
+Your TASK response must follow this structured format to provide clear guidance to the Senior Engineer:
+
+TASK: [One clear sentence describing what to implement]
+CONTEXT: [Key project patterns/architecture the engineer should know]
+FILES_TO_EXAMINE: [Specific files to read for patterns/examples, comma-separated]
+IMPLEMENTATION_APPROACH: [Revised technical approach based on feedback analysis]
+POTENTIAL_ISSUES: [Known pitfalls or challenges to watch for, including lessons from the failure, comma-separated]
+SUCCESS_CRITERIA: [How to verify the implementation works]
 
 **Response Format:**
 If cleanup needed:
@@ -167,10 +177,10 @@ ACTION: WRITE_FILE
 PATH: [project setup file]
 CONTENT: [file content]
 
-TASK: [Your revised task for the engineer, including any project setup completed]
+TASK: [Your revised structured implementation brief addressing the feedback]
 
 If no cleanup needed:
-TASK: [Your revised, specific task description addressing the feedback]`, req.Description, agentsMdContent, context.ProjectStructure, context.GitStatus)
+TASK: [Your revised structured implementation brief addressing the feedback]`, req.Description, agentsMdContent, context.ProjectStructure, context.GitStatus)
 	}
 
 	// Initial briefing scenario
@@ -201,13 +211,23 @@ TASK: [Your revised, specific task description addressing the feedback]`, req.De
 
 **Your Task:**
 1. **FIRST:** Determine if project setup is needed for this task
-2. **THEN:** Create a clear task for the Senior Engineer
+2. **THEN:** Create a structured implementation brief for the Senior Engineer
 
 For new features, consider:
 - Does this need a new subdirectory to avoid conflicts?
 - Does this require project initialization (go mod init, npm init)?
 - Should this be organized in a specific way?
 - Should PROJECT-STRUCTURE.md be created/updated to help other agents understand the layout?
+
+**IMPLEMENTATION BRIEF FORMAT:**
+Your TASK response must follow this structured format to provide clear guidance to the Senior Engineer:
+
+TASK: [One clear sentence describing what to implement]
+CONTEXT: [Key project patterns/architecture the engineer should know]
+FILES_TO_EXAMINE: [Specific files to read for patterns/examples, comma-separated]
+IMPLEMENTATION_APPROACH: [Suggested technical approach based on project analysis]
+POTENTIAL_ISSUES: [Known pitfalls or challenges to watch for, comma-separated]
+SUCCESS_CRITERIA: [How to verify the implementation works]
 
 **Response Format:**
 If project setup needed:
@@ -218,10 +238,18 @@ ACTION: WRITE_FILE
 PATH: [project file if needed]
 CONTENT: [file content]
 
-TASK: [Your task for the engineer, including project structure context]
+TASK: [Your structured implementation brief following the format above]
 
 If no setup needed:
-TASK: [Your comprehensive task description for the engineer]`, req.Description, agentsMdContent, context.ProjectStructure, context.GitStatus)
+TASK: [Your structured implementation brief following the format above]
+
+**Example Brief Format:**
+TASK: Create a REST API endpoint for user authentication
+CONTEXT: This project uses Go Fiber framework with middleware-based routing
+FILES_TO_EXAMINE: handlers/auth.go, middleware/cors.go, main.go
+IMPLEMENTATION_APPROACH: Create new handler in handlers/ directory, add route to main.go, follow existing error handling patterns
+POTENTIAL_ISSUES: Ensure proper CORS configuration, validate input parameters, handle database connection errors
+SUCCESS_CRITERIA: Endpoint responds to POST /auth/login with proper JSON response and status codes`, req.Description, agentsMdContent, context.ProjectStructure, context.GitStatus)
 }
 
 func (em *EngineeringManager) processManagerResponse(ctx context.Context, req ImplementFeatureRequest, llmResponse string, projectCtx *ProjectContext) (*ImplementFeatureResponse, error) {
@@ -378,6 +406,56 @@ func (em *EngineeringManager) DocumentTask(ctx context.Context, result *Workflow
 
 	// 4. Write the new content back to AGENTS.md
 	return em.tools.WriteFile("AGENTS.md", updatedKnowledge)
+}
+
+// buildReplanningPrompt creates an enhanced replanning prompt based on specific engineer feedback
+func (em *EngineeringManager) buildReplanningPrompt(engineerFeedback string, originalBrief string, context *ProjectContext) string {
+	return fmt.Sprintf(`You are the Engineering Manager receiving feedback from your Senior Engineer.
+
+**ORIGINAL BRIEF:** %s
+
+**ENGINEER FEEDBACK/ERROR:** %s
+
+**PROJECT CONTEXT:**
+%s
+
+**YOUR REPLANNING TASK:**
+1. Analyze what went wrong with your original brief
+2. Identify if this was a project setup issue, approach issue, or missing context
+3. Provide a REVISED brief with better guidance
+
+**If the issue was:**
+- Missing files/setup: Use EXECUTE_COMMAND to fix project structure
+- Wrong approach: Revise IMPLEMENTATION_APPROACH with better strategy  
+- Missing context: Add more specific FILES_TO_EXAMINE and CONTEXT
+- Pattern mismatch: Update approach to match existing project patterns
+- Structure issue: Create necessary directories and organization
+
+**REVISED IMPLEMENTATION BRIEF FORMAT:**
+Your response must follow this structured format to provide clear guidance to the Senior Engineer:
+
+TASK: [One clear sentence describing what to implement]
+CONTEXT: [Enhanced project patterns/architecture the engineer should know]
+FILES_TO_EXAMINE: [Specific files to read for patterns/examples, comma-separated]
+IMPLEMENTATION_APPROACH: [Revised technical approach addressing the feedback]
+POTENTIAL_ISSUES: [Known pitfalls including lessons from the failure, comma-separated]
+SUCCESS_CRITERIA: [How to verify the implementation works]
+
+**Response Format:**
+If cleanup/setup needed:
+ACTION: EXECUTE_COMMAND
+COMMAND: [cleanup command]
+
+ACTION: WRITE_FILE  
+PATH: [project setup file]
+CONTENT: [file content]
+
+TASK: [Your revised structured implementation brief addressing the feedback]
+
+If no cleanup needed:
+TASK: [Your revised structured implementation brief addressing the feedback]
+
+Provide a complete revised brief that addresses the specific feedback received.`, originalBrief, engineerFeedback, context.ProjectStructure)
 }
 
 func (em *EngineeringManager) buildDocumentationPrompt(result *WorkflowResult, currentKnowledge string) string {
