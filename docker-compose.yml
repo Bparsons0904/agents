@@ -35,14 +35,14 @@ services:
       - "0.0.0.0:8080:8080" # MCP server API port - accessible on all interfaces
     volumes:
       - ./projects:/app/projects # Mount projects directory
+      - ./test-projects:/app/test-projects # Mount test projects directory  
       - ./mcp-server/config:/app/config # Mount config directory
     environment:
       - OLLAMA_URL=http://ollama:11434
       - PROJECT_ROOT=/app/projects
       - PORT=8080
     depends_on:
-      ollama:
-        condition: service_healthy
+      - ollama
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]

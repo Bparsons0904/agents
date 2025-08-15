@@ -21,19 +21,22 @@ func NewSeniorEngineer(llmClient LLMClient, tools ToolSet, restrictions CommandR
 }
 
 func (se *SeniorEngineer) ImplementFeature(ctx context.Context, req ImplementFeatureRequest) (*ImplementFeatureResponse, error) {
-	// Step 1: Analyze current project state
+	// Step 1: Set working directory if specified
+	if req.WorkingDirectory != "" {
+		se.tools.SetWorkingDirectory(req.WorkingDirectory)
+	}
+	
+	// Step 2: Analyze current project state
 	gitStatus, err := se.tools.GetGitStatus()
 	if err != nil {
-		return &ImplementFeatureResponse{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to get git status: %v", err),
-		}, nil
+		// Git status is optional - continue without it
+		gitStatus = "No git repository detected or git error occurred"
 	}
 
-	// Step 2: Build system prompt with context
+	// Step 3: Build system prompt with context
 	prompt := se.buildSystemPrompt(req, gitStatus)
 
-	// Step 3: Generate implementation plan from LLM
+	// Step 4: Generate implementation plan from LLM
 	response, err := se.llmClient.Generate(ctx, prompt)
 	if err != nil {
 		return &ImplementFeatureResponse{
@@ -42,7 +45,7 @@ func (se *SeniorEngineer) ImplementFeature(ctx context.Context, req ImplementFea
 		}, nil
 	}
 
-	// Step 4: Parse and execute implementation
+	// Step 5: Parse and execute implementation
 	return se.executeImplementation(ctx, req, response)
 }
 

@@ -1,13 +1,13 @@
 [agent]
 role = "senior_engineer"
-model = "qwen3:14b"
+model = "qwen3:14b-q4_K_M"
 max_tokens = 4000
 
 [commands]
 allowed = [
     # Go commands
     "go build", "go test", "go fmt", "go mod tidy", "go run",
-    "go build ./...", "go test ./...", "go mod download",
+    "go build ./...", "go test ./...", "go mod download", "go mod init",
     
     # Node.js commands  
     "npm install", "npm run build", "npm test", "npm run dev",

@@ -40,6 +40,7 @@ type ToolSet interface {
 	ExecuteCommand(command string) (string, error)
 	GetGitStatus() (string, error)
 	GetGitDiff() (string, error)
+	SetWorkingDirectory(dir string)
 }
 
 type CommandRestrictions interface {
