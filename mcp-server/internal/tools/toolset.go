@@ -88,3 +88,11 @@ func (ts *ToolSet) ValidateCommand(command string) error {
 func (ts *ToolSet) GetAllowedCommands() []string {
 	return ts.commands.allowed
 }
+
+func (ts *ToolSet) ListFiles(path string) ([]string, error) {
+	return ts.filesystem.ListFiles(path)
+}
+
+func (ts *ToolSet) FindFiles(pattern string, searchPath string) ([]string, error) {
+	return ts.filesystem.FindFiles(pattern, searchPath)
+}

@@ -49,7 +49,10 @@ func (se *SeniorEngineer) ImplementFeature(
 	var lastError string
 	var result *ImplementFeatureResponse
 	var attempts int
-	maxAttempts := 3
+	var currentErrorCategory string
+	var sameErrorAttempts int
+	maxAttempts := 8          // Increased for 14B model
+	maxSameErrorAttempts := 3 // Reset when error type changes
 
 	for attempts < maxAttempts {
 		select {
@@ -93,14 +96,30 @@ func (se *SeniorEngineer) ImplementFeature(
 		}
 
 		// --- Handle Failure ---
-		// Check for common stuck patterns
-		if se.isStuckOnSameError(result.Error, lastError) {
-			result.Error = fmt.Sprintf("Agent stuck on persistent error after %d attempts: %s", attempts, result.Error)
+		// Categorize the current error
+		newErrorCategory := se.categorizeError(result.Error)
+		
+		// Check if we're dealing with a new type of error
+		if newErrorCategory != currentErrorCategory {
+			// New error type - reset same-error attempt counter
+			currentErrorCategory = newErrorCategory
+			sameErrorAttempts = 1
+			log.Printf("Engineer: New error category '%s', resetting same-error counter", newErrorCategory)
+		} else {
+			// Same error type - increment counter
+			sameErrorAttempts++
+		}
+		
+		// Check if we're stuck on the same error type
+		if sameErrorAttempts >= maxSameErrorAttempts {
+			result.Error = fmt.Sprintf("Agent stuck on '%s' error after %d attempts (total attempts: %d): %s", 
+				currentErrorCategory, sameErrorAttempts, attempts, result.Error)
 			return result, nil
 		}
 		
 		lastError = result.Error
-		log.Printf("Engineer: Attempt %d failed, error: %s", attempts, result.Error)
+		log.Printf("Engineer: Attempt %d/%d failed (%s error #%d): %s", 
+			attempts, maxAttempts, currentErrorCategory, sameErrorAttempts, result.Error)
 	}
 
 	// If we've exhausted all attempts
@@ -145,6 +164,8 @@ Your last attempt failed with the following error. Analyze the error and the cod
 - WRITE_FILE: Create or modify files
 - EXECUTE_COMMAND: Run build, test, and git commands
 - GET_GIT_DIFF: Check current changes
+- LIST_FILES: List files and directories in a path
+- FIND_FILES: Search for files by name pattern
 
 **Guidelines:**
 - Write clean, maintainable code
@@ -171,6 +192,19 @@ file content here
 
 ACTION: EXECUTE_COMMAND
 COMMAND: build command here
+
+ACTION: LIST_FILES
+PATH: directory/path
+
+ACTION: FIND_FILES
+PATTERN: filename_pattern
+SEARCH_PATH: directory/to/search (optional)
+
+IMPORTANT: You MUST start by exploring the project structure before attempting to read any files. 
+
+First, use ACTION: LIST_FILES with PATH: . to see the project root, then explore subdirectories.
+Use ACTION: FIND_FILES to locate specific file types (e.g., PATTERN: .go, PATTERN: handler, etc.).
+Only after understanding the structure should you read existing files and implement changes.
 
 Begin by analyzing the current project structure and implementing the requested feature.`,
 		req.Description,
@@ -222,6 +256,36 @@ func (se *SeniorEngineer) executeImplementation(
 				return result, nil
 			}
 			result.FilesModified = append(result.FilesModified, action.Path)
+
+		case "LIST_FILES":
+			files, err := se.tools.ListFiles(action.Path)
+			if err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("Failed to list files in %s: %v", action.Path, err)
+				return result, nil
+			}
+			// Add results to build output for the engineer to see
+			result.BuildOutput += fmt.Sprintf("Files in %s:\n", action.Path)
+			for _, file := range files {
+				result.BuildOutput += fmt.Sprintf("  %s\n", file)
+			}
+
+		case "FIND_FILES":
+			searchPath := action.SearchPath
+			if searchPath == "" {
+				searchPath = "." // Default to current directory
+			}
+			files, err := se.tools.FindFiles(action.Pattern, searchPath)
+			if err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("Failed to find files with pattern '%s' in %s: %v", action.Pattern, searchPath, err)
+				return result, nil
+			}
+			// Add results to build output for the engineer to see
+			result.BuildOutput += fmt.Sprintf("Files matching '%s' in %s:\n", action.Pattern, searchPath)
+			for _, file := range files {
+				result.BuildOutput += fmt.Sprintf("  %s\n", file)
+			}
 
 		case "EXECUTE_COMMAND":
 			if err := se.restrictions.ValidateCommand(action.Command); err != nil {
@@ -310,6 +374,10 @@ func (se *SeniorEngineer) parseActions(response string) []Action {
 				currentAction.Path = strings.TrimSpace(strings.TrimPrefix(line, "PATH:"))
 			} else if strings.HasPrefix(line, "COMMAND:") {
 				currentAction.Command = strings.TrimSpace(strings.TrimPrefix(line, "COMMAND:"))
+			} else if strings.HasPrefix(line, "PATTERN:") {
+				currentAction.Pattern = strings.TrimSpace(strings.TrimPrefix(line, "PATTERN:"))
+			} else if strings.HasPrefix(line, "SEARCH_PATH:") {
+				currentAction.SearchPath = strings.TrimSpace(strings.TrimPrefix(line, "SEARCH_PATH:"))
 			} else if strings.HasPrefix(line, "CONTENT:") {
 				inContent = true
 				contentBuilder.Reset()
@@ -346,34 +414,67 @@ func (se *SeniorEngineer) getBuildCommand(projectType ProjectType) string {
 	}
 }
 
-// isStuckOnSameError checks if the engineer is stuck on the same or similar error
+// categorizeError categorizes errors into broad types to detect progress vs stuck patterns
+func (se *SeniorEngineer) categorizeError(errorMsg string) string {
+	errorLower := strings.ToLower(errorMsg)
+	
+	// Go-specific compilation errors
+	if strings.Contains(errorLower, "imported and not used") {
+		return "unused_import"
+	}
+	if strings.Contains(errorLower, "undefined:") || strings.Contains(errorLower, "not declared") {
+		return "undefined_symbol"
+	}
+	if strings.Contains(errorLower, "syntax error") || strings.Contains(errorLower, "expected") {
+		return "syntax_error"
+	}
+	if strings.Contains(errorLower, "type") && (strings.Contains(errorLower, "mismatch") || strings.Contains(errorLower, "cannot")) {
+		return "type_error"
+	}
+	
+	// Build and compilation
+	if strings.Contains(errorLower, "build failed") || strings.Contains(errorLower, "compilation") {
+		return "build_failure"
+	}
+	if strings.Contains(errorLower, "package") && strings.Contains(errorLower, "not found") {
+		return "missing_package"
+	}
+	
+	// File system and tooling
+	if strings.Contains(errorLower, "no such file") || strings.Contains(errorLower, "file not found") {
+		return "file_not_found"
+	}
+	if strings.Contains(errorLower, "permission") || strings.Contains(errorLower, "access denied") {
+		return "permission_error"
+	}
+	if strings.Contains(errorLower, "command") && strings.Contains(errorLower, "not found") {
+		return "command_error"
+	}
+	
+	// Network and external
+	if strings.Contains(errorLower, "connection") || strings.Contains(errorLower, "network") {
+		return "network_error"
+	}
+	if strings.Contains(errorLower, "timeout") || strings.Contains(errorLower, "deadline") {
+		return "timeout_error"
+	}
+	
+	// Generic categories
+	if strings.Contains(errorLower, "test") && strings.Contains(errorLower, "failed") {
+		return "test_failure"
+	}
+	
+	return "unknown_error"
+}
+
+// isStuckOnSameError checks if the engineer is stuck on the same or similar error (legacy method, kept for compatibility)
 func (se *SeniorEngineer) isStuckOnSameError(currentError, lastError string) bool {
 	if lastError == "" {
 		return false
 	}
 	
-	// Check for exact match
-	if strings.Contains(currentError, lastError) || strings.Contains(lastError, currentError) {
-		return true
-	}
-	
-	// Check for common stuck patterns
-	stuckPatterns := []string{
-		"imported and not used",
-		"build failed",
-		"compilation error",
-		"syntax error",
-		"undefined:",
-	}
-	
-	for _, pattern := range stuckPatterns {
-		if strings.Contains(strings.ToLower(currentError), pattern) && 
-		   strings.Contains(strings.ToLower(lastError), pattern) {
-			return true
-		}
-	}
-	
-	return false
+	// Use the new categorization system
+	return se.categorizeError(currentError) == se.categorizeError(lastError)
 }
 
 // DocumentTask for SeniorEngineer is a no-op

@@ -163,11 +163,17 @@ func (qa *SeniorQAEngineer) findExistingTests() []string {
 func (qa *SeniorQAEngineer) buildSystemPrompt(req ImplementFeatureRequest, ctx *ImplementationContext) string {
 	var prompt strings.Builder
 
-	prompt.WriteString(fmt.Sprintf(`You are a Senior QA Engineer responsible for comprehensive testing of implemented features.
+	prompt.WriteString(fmt.Sprintf(`You are a Senior QA Engineer focused on strategic testing of critical functionality.
 
-**Current Task:** Write tests for the feature: %s
+**Current Task:** Write essential tests for: %s
 **Project Type:** %s
 **Testing Framework:** %s
+
+**Your Philosophy:**
+- Quality over quantity: Minimal tests that catch real issues
+- Focus on critical paths and user-facing functionality
+- No line coverage goals - test what matters
+- Every test must add value and catch actual bugs
 
 **Implementation Analysis:**
 The following files were modified/created:
@@ -190,34 +196,46 @@ The following files were modified/created:
 
 	prompt.WriteString(`
 **Your Responsibilities:**
-1. Analyze the implemented code for testable functionality
-2. Write comprehensive tests covering normal cases, edge cases, and error conditions
-3. Ensure tests follow project conventions and best practices
-4. Run tests to validate they pass with the current implementation
-5. Identify any implementation bugs revealed by testing
+1. **IDENTIFY CRITICAL AREAS**: Determine what functionality is most important to test
+2. **STRATEGIC TESTING**: Write minimal tests that provide maximum bug detection
+3. **EXECUTION VALIDATION**: Always run tests and ensure they pass before completion
+4. **FAILURE ANALYSIS**: Distinguish between test issues and implementation bugs
 
-**Testing Guidelines:**
-- Test public interfaces and key functionality
-- Include positive tests (happy path) and negative tests (error conditions)
-- Test edge cases and boundary conditions
-- Mock external dependencies appropriately
-- Follow naming conventions for test functions
-- Write clear, descriptive test names
-- Include setup and teardown as needed
+**Critical Area Identification Framework:**
+HIGH PRIORITY - Must Test:
+- Public APIs and user-facing functions
+- Error handling and edge cases
+- Business logic and calculations
+- Data validation and sanitization
+- Integration points and dependencies
+
+MEDIUM PRIORITY - Test if Complex:
+- Helper functions with business logic
+- Complex algorithms or transformations
+- State management
+
+LOW PRIORITY - Skip Unless Trivial:
+- Simple getters/setters
+- Configuration loading
+- Obvious wrapper functions
+
+**Minimal Test Strategy:**
+- ONE test per function for happy path
+- ONE test for most common error condition
+- ONE test for critical edge case (if applicable)
+- NO exhaustive permutation testing
+- NO tests for framework/library functionality
 
 **Available Actions:**
 - READ_FILE: Read existing test files to understand patterns
 - WRITE_FILE: Create new test files
-- EXECUTE_COMMAND: Run test commands
-- GET_GIT_DIFF: Check current changes
+- EXECUTE_COMMAND: Run test commands (MANDATORY before completion)
 
 **Response Format:**
-Please respond with structured test implementation:
-
-ANALYSIS:
-- Testable functionality identified
-- Test strategy and approach
-- Coverage areas and priorities
+CRITICAL_ANALYSIS:
+- List HIGH PRIORITY areas that need testing
+- Justify why each area is critical
+- Identify minimal test cases needed
 
 ACTION: WRITE_FILE
 PATH: path/to/test/file
@@ -230,12 +248,12 @@ ACTION: EXECUTE_COMMAND
 COMMAND: test command
 
 **Quality Criteria:**
+- Tests must validate actual functionality, not implementation details
+- Each test should catch a real failure scenario
 - Tests must be deterministic and reliable
-- Tests should run quickly
-- Test coverage should be comprehensive but practical
-- Tests should catch real bugs, not just exercise code
+- ALL tests must pass before completing QA phase
 
-Begin by analyzing what needs testing and implementing comprehensive test coverage.`)
+Begin by identifying critical areas and implementing targeted tests.`)
 
 	return prompt.String()
 }
@@ -298,13 +316,16 @@ func (qa *SeniorQAEngineer) executeTestImplementation(ctx context.Context, req I
 		}
 	}
 
-	// Run appropriate test command based on project type if not already run
+	// MANDATORY: Ensure tests are executed and pass before completion
 	testCommand := qa.getTestCommand(req.ProjectType)
-	if testCommand != "" && !qa.commandAlreadyExecuted(result.CommandsExecuted, testCommand) {
+	testsExecuted := qa.commandAlreadyExecuted(result.CommandsExecuted, testCommand)
+	
+	if testCommand != "" && !testsExecuted {
 		if err := qa.restrictions.ValidateCommand(testCommand); err == nil {
 			output, err := qa.tools.ExecuteCommand(testCommand)
 			result.CommandsExecuted = append(result.CommandsExecuted, testCommand)
-			result.BuildOutput += "\nTest Execution:\n" + output
+			result.BuildOutput += "\nMandatory Test Execution:\n" + output
+			testsExecuted = true
 			
 			if err != nil {
 				testAnalysis := qa.analyzeTestResults(output, err.Error())
@@ -313,21 +334,47 @@ func (qa *SeniorQAEngineer) executeTestImplementation(ctx context.Context, req I
 					result.Error = fmt.Sprintf("Tests revealed implementation bugs: %s", testAnalysis.Issues)
 					result.NextSteps = "Implementation needs fixes before proceeding"
 					return result, nil
+				} else {
+					result.Success = false
+					result.Error = fmt.Sprintf("Test execution failed: %s", testAnalysis.Issues)
+					result.NextSteps = "Fix test issues and re-run"
+					return result, nil
 				}
 			}
+		} else {
+			result.Success = false
+			result.Error = fmt.Sprintf("Cannot validate test execution: %v", err)
+			result.NextSteps = "Fix test command permissions"
+			return result, nil
 		}
 	}
 
-	// Final analysis of QA work
+	// MANDATORY: Tests must have been executed successfully
+	if !testsExecuted {
+		result.Success = false
+		result.Error = "QA phase requires test execution - no tests were run"
+		result.NextSteps = "Implement and execute tests before completion"
+		return result, nil
+	}
+
+	// Validate that test output shows success
+	if !qa.validateTestSuccess(result.BuildOutput) {
+		result.Success = false
+		result.Error = "Test execution output indicates failures or issues"
+		result.NextSteps = "All tests must pass before QA completion"
+		return result, nil
+	}
+
+	// Final analysis of QA work with stricter validation
 	qaAnalysis := qa.analyzeQAWork(result, llmResponse)
 	
-	if qaAnalysis.HasAdequateTests {
-		result.Message = "Comprehensive tests implemented and validated"
+	if qaAnalysis.HasAdequateTests && qaAnalysis.TestCount > 0 {
+		result.Message = "Strategic tests implemented and validated - all tests passing"
 		result.NextSteps = "Ready for tech lead quality review"
 	} else {
 		result.Success = false
-		result.Error = qaAnalysis.Issues
-		result.NextSteps = "Test implementation needs improvement"
+		result.Error = fmt.Sprintf("QA validation failed: %s", qaAnalysis.Issues)
+		result.NextSteps = "Address test implementation issues"
 	}
 
 	return result, nil
@@ -384,6 +431,41 @@ type QAAnalysis struct {
 	CoverageAreas   []string
 }
 
+func (qa *SeniorQAEngineer) validateTestSuccess(buildOutput string) bool {
+	lowerOutput := strings.ToLower(buildOutput)
+	
+	// Check for test success indicators
+	successPatterns := []string{
+		"pass", "ok", "success", "all tests passed",
+		"0 failed", "✓", "✔", "passed",
+	}
+	
+	// Check for failure indicators
+	failurePatterns := []string{
+		"fail", "error", "assertion", "exception",
+		"failed", "✗", "✖", "timeout", "panic",
+	}
+	
+	hasSuccess := false
+	for _, pattern := range successPatterns {
+		if strings.Contains(lowerOutput, pattern) {
+			hasSuccess = true
+			break
+		}
+	}
+	
+	hasFailure := false
+	for _, pattern := range failurePatterns {
+		if strings.Contains(lowerOutput, pattern) {
+			hasFailure = true
+			break
+		}
+	}
+	
+	// Must have success indicators and no failure indicators
+	return hasSuccess && !hasFailure
+}
+
 func (qa *SeniorQAEngineer) analyzeQAWork(result *ImplementFeatureResponse, llmResponse string) QAAnalysis {
 	analysis := QAAnalysis{}
 	
@@ -396,24 +478,38 @@ func (qa *SeniorQAEngineer) analyzeQAWork(result *ImplementFeatureResponse, llmR
 	}
 	analysis.TestCount = testFileCount
 	
-	// Analyze test coverage from LLM response
+	// Analyze critical area coverage from LLM response
 	lowerResponse := strings.ToLower(llmResponse)
 	
-	coverageKeywords := []string{
-		"test", "assert", "expect", "verify", "check",
-		"happy path", "edge case", "error", "boundary",
-		"mock", "setup", "teardown",
+	// Look for evidence of critical area identification
+	criticalAreaKeywords := []string{
+		"critical", "high priority", "public api", "user-facing",
+		"business logic", "error handling", "validation",
+		"integration", "edge case", "happy path",
 	}
 	
-	coverageCount := 0
-	for _, keyword := range coverageKeywords {
+	criticalAreaCount := 0
+	for _, keyword := range criticalAreaKeywords {
 		if strings.Contains(lowerResponse, keyword) {
-			coverageCount++
+			criticalAreaCount++
 		}
 	}
 	
-	// Check for comprehensive testing
-	if testFileCount >= 1 && coverageCount >= 5 {
+	// Check for strategic testing approach
+	strategicKeywords := []string{
+		"minimal", "strategic", "targeted", "essential",
+		"must test", "critical path", "functionality",
+	}
+	
+	strategicCount := 0
+	for _, keyword := range strategicKeywords {
+		if strings.Contains(lowerResponse, keyword) {
+			strategicCount++
+		}
+	}
+	
+	// Validate quality over quantity approach
+	if testFileCount >= 1 && criticalAreaCount >= 3 && strategicCount >= 2 {
 		analysis.HasAdequateTests = true
 	} else {
 		analysis.HasAdequateTests = false
@@ -422,11 +518,14 @@ func (qa *SeniorQAEngineer) analyzeQAWork(result *ImplementFeatureResponse, llmR
 		if testFileCount == 0 {
 			issues = append(issues, "No test files created")
 		}
-		if coverageCount < 3 {
-			issues = append(issues, "Insufficient test coverage")
+		if criticalAreaCount < 3 {
+			issues = append(issues, "Insufficient critical area identification")
 		}
-		if !strings.Contains(lowerResponse, "edge") && !strings.Contains(lowerResponse, "error") {
-			issues = append(issues, "Missing edge case and error testing")
+		if strategicCount < 2 {
+			issues = append(issues, "Missing strategic testing approach")
+		}
+		if !strings.Contains(lowerResponse, "critical_analysis") {
+			issues = append(issues, "Missing required critical analysis section")
 		}
 		
 		analysis.Issues = strings.Join(issues, "; ")

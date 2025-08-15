@@ -67,6 +67,21 @@ func (re *RoutingEngine) initializeRules() {
 		{
 			FromAgent: AgentRoleEngineer,
 			Condition: func(result *agent.ImplementFeatureResponse) bool {
+				// Task completed successfully without file changes usually means:
+				// 1. It was a maintenance task (like dependency resolution)
+				// 2. The implementation failed but agent reported success
+				// Route to Tech Lead for final assessment
+				return result.Success && len(result.FilesModified) == 0 && 
+					   !strings.Contains(strings.ToLower(result.Message), "failed") &&
+					   !strings.Contains(strings.ToLower(result.Error), "failed")
+			},
+			NextAgent: AgentRoleTechLead,
+			Reason:    "Task completed without file changes, skip to quality review",
+			Priority:  19,
+		},
+		{
+			FromAgent: AgentRoleEngineer,
+			Condition: func(result *agent.ImplementFeatureResponse) bool {
 				return !result.Success && re.isBuildError(result)
 			},
 			NextAgent: AgentRoleEngineer, // Stay in Engineer to fix build

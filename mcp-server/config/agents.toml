@@ -1,42 +1,44 @@
 [workflow]
-max_total_iterations = 7
-timeout_minutes = 15
+max_total_iterations = 12
+timeout_minutes = 20
 
 [agents.engineering_manager]
 role = "engineering_manager"
 model = "qwen3:14b-q4_K_M"
-max_iterations = 2
-tools = ["read_file", "git_status", "git_log"]
+max_iterations = 4
+tools = ["read_file", "write_file", "execute_command", "git_status", "git_log", "git_diff", "list_files", "find_files"]
 
 [agents.senior_engineer]
 role = "senior_engineer" 
 model = "qwen3:14b-q4_K_M"
-max_iterations = 3
-tools = ["read_file", "write_file", "execute_command", "git_diff"]
+max_iterations = 5
+tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files"]
 
 [agents.senior_qa]
 role = "senior_qa"
 model = "qwen3:14b-q4_K_M" 
 max_iterations = 2
-tools = ["read_file", "write_file", "execute_command", "git_diff"]
+tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files"]
 
 [agents.senior_tech_lead]
 role = "senior_tech_lead"
 model = "qwen3:14b-q4_K_M"
 max_iterations = 2
-tools = ["read_file", "write_file", "execute_command", "git_diff", "http_request"]
+tools = ["read_file", "write_file", "execute_command", "git_diff", "http_request", "list_files", "find_files"]
 
-# Command restrictions remain the same as existing agent.toml
+# Enhanced command allowlist for project management and self-recovery
 [commands]
 allowed = [
-    # Go commands
+    # Go commands - Enhanced for project setup
     "go build", "go test", "go fmt", "go vet", "go mod tidy", "go run",
     "go build ./...", "go test ./...", "go mod download", "go mod init",
+    "go build .", "go test .", "go clean", "go env", "go get",
+    "go build -o", "go mod init *", "go work init",
     
     # Node.js commands  
     "npm install", "npm run build", "npm test", "npm run dev",
     "npm ci", "yarn install", "yarn build", "yarn test",
-    "npm run lint", "npm audit",
+    "npm run lint", "npm audit", "npm init -y",
     
     # Python commands
     "python -m pytest", "python -m pip install", "python setup.py",
@@ -46,22 +48,39 @@ allowed = [
     # Build tools
     "make", "make build", "make test", "make clean",
     
-    # Git operations
+    # Git operations - Enhanced for project management
     "git add", "git status", "git diff", "git log --oneline -10",
-    "git log --oneline", "git show", "git branch",
+    "git log --oneline", "git show", "git branch", "git init",
+    "git add .", "git reset", "git clean -fd", "git stash",
     
-    # File operations
-    "ls", "cat", "head", "tail", "find", "grep",
-    "mkdir", "touch", "cp", "mv"
+    # File operations - Enhanced for project cleanup and organization
+    "ls", "ls -la", "ls -l", "cat", "head", "tail", "find", "grep",
+    "mkdir", "mkdir -p", "touch", "cp", "cp -r", "mv", "rm", "rm -f",
+    "rmdir", "pwd", "basename", "dirname",
+    # Safe recursive removal - ONLY in working directory paths
+    "rm -rf ./", "rm -rf ./*", "rm -rf */", "rm -rf *.go", "rm -rf *.js", "rm -rf *.py",
+    
+    # Directory navigation and management
+    "cd", "pushd", "popd",
+    
+    # Text processing for cleanup
+    "sed", "awk", "sort", "uniq", "wc", "tr",
+    
+    # Process and system info (safe commands)
+    "ps", "which", "whoami", "id", "uname", "env"
 ]
 
 [restrictions]
 blocked_patterns = [
-    "sudo", "rm -rf", "chmod +x", "systemctl", 
+    "sudo", "chmod +x", "systemctl", 
     "iptables", "mount", "cd /", "cat /etc/",
     "passwd", "usermod", "userdel", "groupmod",
     "service", "systemd", "crontab", "at",
     "wget", "curl http", "curl https", "ssh",
     "scp", "rsync", "dd", "fdisk", "mkfs",
-    "chown", "chgrp", "umount", "kill -9"
+    "chown", "chgrp", "umount", "kill -9",
+    # Dangerous rm patterns - block absolute paths and system dirs
+    "rm -rf /", "rm -rf /*", "rm -rf ~", "rm -rf /usr", "rm -rf /etc",
+    "rm -rf /var", "rm -rf /opt", "rm -rf /home", "rm -rf /root",
+    "rm -rf /bin", "rm -rf /sbin", "rm -rf /lib", "rm -rf /boot"
 ]
