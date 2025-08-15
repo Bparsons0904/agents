@@ -1,28 +1,4 @@
 services:
-  # Model downloader init container
-  ollama-init:
-    image: ollama/ollama:latest
-    container_name: agent-ollama-init
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-    command: >
-      sh -c "
-        ollama serve &
-        sleep 10 &&
-        ollama pull qwen3:14b-q4_K_M &&
-        echo 'Model downloaded successfully' &&
-        pkill ollama
-      "
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
   ollama:
     image: ollama/ollama:latest
     container_name: agent-ollama
@@ -30,6 +6,7 @@ services:
       - "0.0.0.0:11434:11434" # Ollama API port - accessible on all interfaces
     volumes:
       - ollama_data:/root/.ollama # Persist downloaded models
+      - ./init-model.sh:/init-model.sh
     environment:
       - OLLAMA_HOST=0.0.0.0 # Allow external connections
     deploy:
@@ -40,15 +17,13 @@ services:
               count: 1
               capabilities: [gpu]
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "/init-model.sh"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
-    depends_on:
-      ollama-init:
-        condition: service_completed_successfully
+      start_period: 60s
 
   # MCP Server (to be implemented)
   # mcp-server:
