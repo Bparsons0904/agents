@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # Model downloader init container
   ollama-init:
@@ -53,26 +51,26 @@ services:
         condition: service_completed_successfully
 
   # MCP Server (to be implemented)
-  mcp-server:
-    build:
-      context: ./mcp-server
-      dockerfile: Dockerfile
-    container_name: agent-mcp-server
-    ports:
-      - "0.0.0.0:8080:8080" # MCP server API port - accessible on all interfaces
-    volumes:
-      - ./projects:/app/projects # Mount projects directory
-      - /var/run/docker.sock:/var/run/docker.sock # For potential container operations
-    environment:
-      - OLLAMA_URL=http://ollama:11434
-      - PROJECT_ROOT=/app/projects
-    depends_on:
-      ollama:
-        condition: service_healthy
-    restart: unless-stopped
-    # Uncomment when ready to build MCP server
-    # profiles:
-    #   - mcp
+  # mcp-server:
+  #   build:
+  #     context: ./mcp-server
+  #     dockerfile: Dockerfile
+  #   container_name: agent-mcp-server
+  #   ports:
+  #     - "0.0.0.0:8080:8080" # MCP server API port - accessible on all interfaces
+  #   volumes:
+  #     - ./projects:/app/projects # Mount projects directory
+  #     - /var/run/docker.sock:/var/run/docker.sock # For potential container operations
+  #   environment:
+  #     - OLLAMA_URL=http://ollama:11434
+  #     - PROJECT_ROOT=/app/projects
+  #   depends_on:
+  #     ollama:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   # Uncomment when ready to build MCP server
+  #   # profiles:
+  #   #   - mcp
 
 volumes:
   ollama_data:
