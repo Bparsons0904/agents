@@ -17,7 +17,7 @@ func NewToolSet(commands config.CommandsSection, restrictions config.Restriction
 	return &ToolSet{
 		filesystem: NewFileSystem(workingDir),
 		git:        NewGitOperations(workingDir),
-		commands:   NewCommandValidator(commands.Allowed, restrictions.BlockedPatterns),
+		commands:   NewCommandValidator(commands.Allowed, restrictions.BlockedPatterns, workingDir),
 		workingDir: workingDir,
 	}
 }
@@ -70,10 +70,11 @@ func (ts *ToolSet) SetWorkingDirectory(dir string) {
 	ts.workingDir = dir
 	ts.filesystem = NewFileSystem(dir)
 	ts.git = NewGitOperations(dir)
+	ts.commands = NewCommandValidator(ts.commands.allowed, ts.commands.blockedPatterns, dir)
 }
 
 func (ts *ToolSet) UpdateRestrictions(restrictions config.RestrictionsSection) {
-	ts.commands = NewCommandValidator(ts.commands.allowed, restrictions.BlockedPatterns)
+	ts.commands = NewCommandValidator(ts.commands.allowed, restrictions.BlockedPatterns, ts.workingDir)
 }
 
 func (ts *ToolSet) IsAllowed(command string) bool {
@@ -82,4 +83,8 @@ func (ts *ToolSet) IsAllowed(command string) bool {
 
 func (ts *ToolSet) ValidateCommand(command string) error {
 	return ts.commands.ValidateCommand(command)
+}
+
+func (ts *ToolSet) GetAllowedCommands() []string {
+	return ts.commands.allowed
 }

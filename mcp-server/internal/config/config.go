@@ -19,6 +19,7 @@ type AgentSection struct {
 	Role      string `toml:"role"`
 	Model     string `toml:"model"`
 	MaxTokens int    `toml:"max_tokens"`
+	PerAgentTimeoutMinutes int `toml:"per_agent_timeout_minutes"`
 }
 
 // New multi-agent workflow config
@@ -38,6 +39,7 @@ type WorkflowAgentConfig struct {
 	Role          string   `toml:"role"`
 	Model         string   `toml:"model"`
 	MaxIterations int      `toml:"max_iterations"`
+	PerAgentTimeoutMinutes int `toml:"per_agent_timeout_minutes"`
 	Tools         []string `toml:"tools"`
 }
 
@@ -101,6 +103,10 @@ func (cfg *AgentConfig) validate() error {
 
 	if cfg.Agent.MaxTokens <= 0 {
 		cfg.Agent.MaxTokens = 4000 // default
+	}
+
+	if cfg.Agent.PerAgentTimeoutMinutes <= 0 {
+		cfg.Agent.PerAgentTimeoutMinutes = 5 // default
 	}
 
 	if len(cfg.Commands.Allowed) == 0 {
@@ -224,6 +230,11 @@ func (cfg *WorkflowConfig) validateWorkflow() error {
 
 		if agentCfg.MaxIterations <= 0 {
 			return fmt.Errorf("agent %s max_iterations must be positive", name)
+		}
+
+		if agentCfg.PerAgentTimeoutMinutes <= 0 {
+			agentCfg.PerAgentTimeoutMinutes = 5 // default
+			cfg.Agents[name] = agentCfg
 		}
 	}
 

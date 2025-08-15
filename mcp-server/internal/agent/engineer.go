@@ -3,59 +3,133 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
+	"mcp-server/internal/config"
 	"strings"
+	"time"
 )
 
 type SeniorEngineer struct {
 	llmClient    LLMClient
 	tools        ToolSet
 	restrictions CommandRestrictions
+	config       config.WorkflowAgentConfig // Agent-specific config
 }
 
-func NewSeniorEngineer(llmClient LLMClient, tools ToolSet, restrictions CommandRestrictions) *SeniorEngineer {
+func NewSeniorEngineer(
+	llmClient LLMClient,
+	tools ToolSet,
+	restrictions CommandRestrictions,
+	cfg config.WorkflowAgentConfig,
+) *SeniorEngineer {
 	return &SeniorEngineer{
 		llmClient:    llmClient,
 		tools:        tools,
 		restrictions: restrictions,
+		config:       cfg,
 	}
 }
 
-func (se *SeniorEngineer) ImplementFeature(ctx context.Context, req ImplementFeatureRequest) (*ImplementFeatureResponse, error) {
-	// Step 1: Set working directory if specified
+func (se *SeniorEngineer) ImplementFeature(
+	ctx context.Context,
+	req ImplementFeatureRequest,
+) (*ImplementFeatureResponse, error) {
+	// Set per-agent timeout
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		time.Duration(se.config.PerAgentTimeoutMinutes)*time.Minute,
+	)
+	defer cancel()
+
+	// Set working directory if specified
 	if req.WorkingDirectory != "" {
 		se.tools.SetWorkingDirectory(req.WorkingDirectory)
 	}
-	
-	// Step 2: Analyze current project state
-	gitStatus, err := se.tools.GetGitStatus()
-	if err != nil {
-		// Git status is optional - continue without it
-		gitStatus = "No git repository detected or git error occurred"
+
+	var lastError string
+	var result *ImplementFeatureResponse
+	var attempts int
+	maxAttempts := 3
+
+	for attempts < maxAttempts {
+		select {
+		case <-ctx.Done():
+			return &ImplementFeatureResponse{Success: false, Error: "Agent timed out"}, nil
+		default:
+		}
+
+		attempts++
+
+		// Analyze current project state
+		gitStatus, err := se.tools.GetGitStatus()
+		if err != nil {
+			gitStatus = "No git repository detected or git error occurred"
+		}
+
+		// Build system prompt with context and last error
+		prompt := se.buildSystemPrompt(req, gitStatus, lastError)
+
+		// Generate implementation plan from LLM
+		llmResponse, err := se.llmClient.Generate(ctx, prompt)
+		if err != nil {
+			return &ImplementFeatureResponse{
+				Success: false,
+				Error:   fmt.Sprintf("LLM generation failed: %v", err),
+			}, nil
+		}
+
+		// Parse and execute implementation
+		result, err = se.executeImplementation(ctx, req, llmResponse)
+		if err != nil {
+			return &ImplementFeatureResponse{
+				Success: false,
+				Error:   fmt.Sprintf("Error during implementation execution: %v", err),
+			}, nil
+		}
+
+		// If successful, we are done
+		if result.Success {
+			return result, nil
+		}
+
+		// --- Handle Failure ---
+		// Check for common stuck patterns
+		if se.isStuckOnSameError(result.Error, lastError) {
+			result.Error = fmt.Sprintf("Agent stuck on persistent error after %d attempts: %s", attempts, result.Error)
+			return result, nil
+		}
+		
+		lastError = result.Error
+		log.Printf("Engineer: Attempt %d failed, error: %s", attempts, result.Error)
 	}
 
-	// Step 3: Build system prompt with context
-	prompt := se.buildSystemPrompt(req, gitStatus)
-
-	// Step 4: Generate implementation plan from LLM
-	response, err := se.llmClient.Generate(ctx, prompt)
-	if err != nil {
-		return &ImplementFeatureResponse{
-			Success: false,
-			Error:   fmt.Sprintf("LLM generation failed: %v", err),
-		}, nil
-	}
-
-	// Step 5: Parse and execute implementation
-	return se.executeImplementation(ctx, req, response)
+	// If we've exhausted all attempts
+	result.Error = fmt.Sprintf("Agent failed after %d attempts. Last error: %s", maxAttempts, result.Error)
+	return result, nil
 }
 
-func (se *SeniorEngineer) buildSystemPrompt(req ImplementFeatureRequest, gitStatus string) string {
-	return fmt.Sprintf(`You are a Senior Software Engineer focused on implementing high-quality code.
+func (se *SeniorEngineer) buildSystemPrompt(
+	req ImplementFeatureRequest,
+	gitStatus, lastError string,
+) string {
+	correctionPrompt := ""
+	if lastError != "" {
+		correctionPrompt = fmt.Sprintf(`
+**Previous Attempt Failed!**
+Your last attempt failed with the following error. Analyze the error and the code you produced, then generate a new plan to fix it.
+
+**Error:**
+%s
+`, lastError)
+	}
+
+	return fmt.Sprintf(
+		`You are a Senior Software Engineer focused on implementing high-quality code.
 
 **Current Task:** %s
 **Project Type:** %s
 **Working Directory:** %s
-
+%s
 **Current Git Status:**
 %s
 
@@ -78,7 +152,9 @@ func (se *SeniorEngineer) buildSystemPrompt(req ImplementFeatureRequest, gitStat
 - Include proper error handling
 - Add minimal comments only for complex logic
 - Ensure changes build without errors
-- Use fail-fast approach - attempt once, report clearly on failure
+- **For Go projects: Remove unused imports, handle all declared variables**
+- **If you get "imported and not used" errors, remove the unused import**
+- **If you are unable to fix a build error after an attempt, or if you believe you cannot complete the task, respond with a single line: ACTION: GIVE_UP**
 
 **Response Format:**
 Please respond with a structured plan using these action markers:
@@ -89,18 +165,27 @@ PATH: path/to/file
 ACTION: WRITE_FILE
 PATH: path/to/new/file
 CONTENT:
-` + "```" + `
+`+"```"+`
 file content here
-` + "```" + `
+`+"```"+`
 
 ACTION: EXECUTE_COMMAND
 COMMAND: build command here
 
-Begin by analyzing the current project structure and implementing the requested feature.`, 
-		req.Description, req.ProjectType, req.WorkingDirectory, gitStatus)
+Begin by analyzing the current project structure and implementing the requested feature.`,
+		req.Description,
+		req.ProjectType,
+		req.WorkingDirectory,
+		correctionPrompt,
+		gitStatus,
+	)
 }
 
-func (se *SeniorEngineer) executeImplementation(ctx context.Context, req ImplementFeatureRequest, llmResponse string) (*ImplementFeatureResponse, error) {
+func (se *SeniorEngineer) executeImplementation(
+	ctx context.Context,
+	req ImplementFeatureRequest,
+	llmResponse string,
+) (*ImplementFeatureResponse, error) {
 	result := &ImplementFeatureResponse{
 		Success:          true,
 		FilesModified:    []string{},
@@ -113,6 +198,12 @@ func (se *SeniorEngineer) executeImplementation(ctx context.Context, req Impleme
 	actions := se.parseActions(llmResponse)
 
 	for _, action := range actions {
+		if action.Type == "GIVE_UP" {
+			result.Success = false
+			result.Error = "Agent decided to give up."
+			return result, nil
+		}
+
 		switch action.Type {
 		case "READ_FILE":
 			// Just for context, don't need to store result
@@ -140,9 +231,13 @@ func (se *SeniorEngineer) executeImplementation(ctx context.Context, req Impleme
 			}
 
 			output, err := se.tools.ExecuteCommand(action.Command)
+			log.Printf("Engineer: EXECUTE_COMMAND result - Error: %v, Output: %s", err, output)
 			if err != nil {
 				result.Success = false
-				result.Error = fmt.Sprintf("Command execution failed: %v", err)
+				result.Error = fmt.Sprintf(
+					"Command execution failed: %v",
+					err,
+				)
 				result.BuildOutput = output
 				return result, nil
 			}
@@ -156,6 +251,12 @@ func (se *SeniorEngineer) executeImplementation(ctx context.Context, req Impleme
 	if buildCommand != "" {
 		if err := se.restrictions.ValidateCommand(buildCommand); err == nil {
 			output, err := se.tools.ExecuteCommand(buildCommand)
+			log.Printf(
+				"Engineer: Build Command (%s) result - Error: %v, Output: %s",
+				buildCommand,
+				err,
+				output,
+			)
 			if err != nil {
 				result.Success = false
 				result.Error = fmt.Sprintf("Build failed: %v", err)
@@ -171,14 +272,18 @@ func (se *SeniorEngineer) executeImplementation(ctx context.Context, req Impleme
 		result.Message = "Feature implemented successfully"
 	}
 
+	log.Printf(
+		"Engineer: Final executeImplementation result - Success: %v, Error: %v",
+		result.Success,
+		result.Error,
+	)
 	return result, nil
 }
-
 
 func (se *SeniorEngineer) parseActions(response string) []Action {
 	var actions []Action
 	lines := strings.Split(response, "\n")
-	
+
 	var currentAction *Action
 	var inContent bool
 	var contentBuilder strings.Builder
@@ -231,7 +336,7 @@ func (se *SeniorEngineer) parseActions(response string) []Action {
 func (se *SeniorEngineer) getBuildCommand(projectType ProjectType) string {
 	switch projectType {
 	case ProjectTypeGo:
-		return "go build ./..."
+		return "go build ."
 	case ProjectTypeTypeScript:
 		return "npm run build"
 	case ProjectTypePython:
@@ -240,3 +345,39 @@ func (se *SeniorEngineer) getBuildCommand(projectType ProjectType) string {
 		return ""
 	}
 }
+
+// isStuckOnSameError checks if the engineer is stuck on the same or similar error
+func (se *SeniorEngineer) isStuckOnSameError(currentError, lastError string) bool {
+	if lastError == "" {
+		return false
+	}
+	
+	// Check for exact match
+	if strings.Contains(currentError, lastError) || strings.Contains(lastError, currentError) {
+		return true
+	}
+	
+	// Check for common stuck patterns
+	stuckPatterns := []string{
+		"imported and not used",
+		"build failed",
+		"compilation error",
+		"syntax error",
+		"undefined:",
+	}
+	
+	for _, pattern := range stuckPatterns {
+		if strings.Contains(strings.ToLower(currentError), pattern) && 
+		   strings.Contains(strings.ToLower(lastError), pattern) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// DocumentTask for SeniorEngineer is a no-op
+func (se *SeniorEngineer) DocumentTask(ctx context.Context, result *WorkflowResult) error {
+	return nil
+}
+

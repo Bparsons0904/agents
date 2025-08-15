@@ -9,12 +9,14 @@ import (
 type CommandValidator struct {
 	allowed         []string
 	blockedPatterns []string
+	workingDir      string
 }
 
-func NewCommandValidator(allowed, blockedPatterns []string) *CommandValidator {
+func NewCommandValidator(allowed, blockedPatterns []string, workingDir string) *CommandValidator {
 	return &CommandValidator{
 		allowed:         allowed,
 		blockedPatterns: blockedPatterns,
+		workingDir:      workingDir,
 	}
 }
 
@@ -50,14 +52,9 @@ func (cv *CommandValidator) ExecuteCommand(command string) (string, error) {
 		return "", err
 	}
 
-	// Split command into parts
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return "", fmt.Errorf("empty command")
-	}
-
-	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Dir = cv.workingDir
 	output, err := cmd.CombinedOutput()
-	
+
 	return string(output), err
 }

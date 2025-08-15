@@ -90,7 +90,13 @@ func main() {
 		// Initialize single agent setup
 		llmClient := llm.NewOllamaClient(ollamaURL, cfg.Model)
 		toolSet := tools.NewToolSet(cfg.Commands, cfg.Restrictions, workingDir)
-		engineer := agent.NewSeniorEngineer(llmClient, toolSet, toolSet)
+		// Create a config for the single engineer agent
+		engineerConfig := config.WorkflowAgentConfig{
+			Role:          cfg.Agent.Role,
+			Model:         cfg.Agent.Model,
+			PerAgentTimeoutMinutes: cfg.Agent.PerAgentTimeoutMinutes,
+		}
+		engineer := agent.NewSeniorEngineer(llmClient, toolSet, toolSet, engineerConfig)
 		server.agent = engineer
 		
 		fmt.Println("Running in single-agent mode")
@@ -120,7 +126,7 @@ func main() {
 			role := agent.AgentRole(agentConfig.Role)
 			agentLLMClient := llm.NewOllamaClient(ollamaURL, agentConfig.Model)
 			
-			agentInstance, err := agentFactory.CreateAgent(role, agentLLMClient, toolSet, toolSet)
+			agentInstance, err := agentFactory.CreateAgent(role, agentLLMClient, toolSet, toolSet, agentConfig)
 			if err != nil {
 				log.Fatalf("Failed to create agent %s: %v", roleName, err)
 			}

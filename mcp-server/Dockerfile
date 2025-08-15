@@ -24,6 +24,7 @@ FROM alpine:latest
 
 # Install ca-certificates for HTTPS requests and git for operations
 RUN apk --no-cache add ca-certificates git curl
+RUN apk add --no-cache go --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
 
 WORKDIR /app
 
@@ -42,7 +43,7 @@ EXPOSE 8080
 # Set default environment variables
 ENV PORT=8080
 ENV OLLAMA_URL=http://ollama:11434
-ENV PROJECT_ROOT=/app/projects
+ENV PROJECT_ROOT=/app/test-projects
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

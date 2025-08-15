@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -185,11 +186,25 @@ func (wo *WorkflowOrchestrator) ExecuteWorkflow(ctx context.Context, req agent.W
 		// Update state
 		state.IterationCounts[state.CurrentAgent]++
 		state.CurrentAgent = nextAgent
+		// Pass the output of the previous agent as the task for the next one.
+		if agentResult.NextSteps != "" {
+			state.TaskDescription = agentResult.NextSteps
+		}
 	}
 
 	// Finalize result with diagnostics
 	result.WorkflowHistory = state.WorkflowHistory
 	wo.enhanceResultWithDiagnostics(result, state)
+
+	// If workflow was successful, call EM to document the task
+	if result.Success {
+		if em, ok := wo.agents[AgentRoleEM]; ok {
+			if err := em.DocumentTask(ctx, result); err != nil {
+				// Log the documentation failure, but don't fail the whole workflow
+				log.Printf("EM failed to document task: %v", err)
+			}
+		}
+	}
 	
 	return result, nil
 }
@@ -273,19 +288,11 @@ func (wo *WorkflowOrchestrator) executeCurrentAgent(ctx context.Context, state *
 }
 
 func (wo *WorkflowOrchestrator) buildAgentPrompt(state *WorkflowState, req WorkflowRequest) string {
-	basePrompt := req.Description
-	
-	// Add workflow context
-	if state.CurrentAgent != AgentRoleEM {
-		basePrompt += "\n\nWorkflow Context:\n"
-		if len(state.WorkflowHistory) > 0 {
-			lastTransition := state.WorkflowHistory[len(state.WorkflowHistory)-1]
-			basePrompt += fmt.Sprintf("Previous agent: %s\nTransition reason: %s\n", 
-				lastTransition.FromAgent, lastTransition.Reason)
-		}
-	}
+	// The TaskDescription in the state is the source of truth for the current task.
+	// The EM updates this field, and subsequent agents use the updated description.
+	basePrompt := state.TaskDescription
 
-	// Add project context
+	// Add project context, which is always useful
 	if state.ProjectContext != nil {
 		if state.ProjectContext.ClaudeMd != "" {
 			basePrompt += "\n\nProject Instructions (CLAUDE.md):\n" + state.ProjectContext.ClaudeMd

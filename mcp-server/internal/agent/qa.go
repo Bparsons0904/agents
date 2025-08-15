@@ -525,3 +525,8 @@ func (qa *SeniorQAEngineer) parseActions(response string) []Action {
 
 	return actions
 }
+
+// DocumentTask for SeniorQAEngineer is a no-op
+func (qa *SeniorQAEngineer) DocumentTask(ctx context.Context, result *WorkflowResult) error {
+	return nil
+}

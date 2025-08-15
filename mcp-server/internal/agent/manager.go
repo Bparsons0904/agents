@@ -102,231 +102,98 @@ func (em *EngineeringManager) gatherProjectContext() (*ProjectContext, error) {
 }
 
 func (em *EngineeringManager) buildSystemPrompt(req ImplementFeatureRequest, context *ProjectContext) string {
-	var prompt strings.Builder
+	// This function will now generate a prompt focused on briefing, not deep planning.
+	// The orchestrator will provide the final summary for the documentation phase.
 
-	prompt.WriteString(fmt.Sprintf(`You are a Senior Engineering Manager responsible for planning and orchestrating software development.
-
-**Current Task:** %s
-**Project Type:** %s
-**Working Directory:** %s
-
-**Your Responsibilities:**
-1. Analyze the requested feature and understand project context
-2. Create a detailed implementation plan
-3. Identify potential risks and dependencies  
-4. Provide clear guidance for the implementation team
-5. Make routing decisions for the workflow
-
-**Current Git Status:**
-%s
-
-`, req.Description, req.ProjectType, req.WorkingDirectory, context.GitStatus))
-
-	// Add project documentation if available
-	if context.ClaudeMd != "" {
-		prompt.WriteString(fmt.Sprintf(`**Project Instructions (CLAUDE.md):**
-%s
-
-`, context.ClaudeMd))
+	agentsMdContent := context.AgentsMd
+	if agentsMdContent == "" {
+		agentsMdContent = "No AGENTS.md file found. This file should be created to document project standards and learnings."
 	}
 
-	if context.AgentsMd != "" {
-		prompt.WriteString(fmt.Sprintf(`**Agent Instructions (AGENTS.md):**
+	return fmt.Sprintf(`You are the Engineering Manager, a facilitator for the software development team.
+
+**Your Role:**
+1.  **Briefing:** Synthesize the user's request with existing project knowledge into a clear task for the Senior Engineer.
+2.  **Organizing:** Ensure the engineer has all relevant context from past work.
+
+**User Request:** %s
+
+**Project Knowledge (from AGENTS.md):**
 %s
 
-`, context.AgentsMd))
-	}
-
-	// Add existing project files context
-	if len(context.ExistingFiles) > 0 {
-		prompt.WriteString("**Existing Project Files:**\n")
-		for filename, content := range context.ExistingFiles {
-			if len(content) > 500 {
-				content = content[:500] + "... (truncated)"
-			}
-			prompt.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", filename, content))
-		}
-	}
-
-	prompt.WriteString(`**Available Actions:**
-- READ_FILE: Read existing code files to understand structure
-- ANALYZE_STRUCTURE: Understand project layout and conventions
-- CREATE_PLAN: Generate detailed implementation plan
-
-**Guidelines:**
-- Understand existing code patterns and conventions before planning
-- Consider dependencies, testing requirements, and integration points
-- Plan for quality assurance and code review steps
-- Identify potential risks and mitigation strategies
-- Create actionable steps for the implementation team
+**Your Task:**
+Based on the user request and the project knowledge, write a concise task description for the Senior Engineer. 
+Focus on clarity and providing actionable context. Do not create a technical plan. 
 
 **Response Format:**
-Please respond with a structured analysis and plan:
+Respond with only the task description for the engineer. Start with "TASK:".
 
-ANALYSIS:
-- Project structure assessment
-- Existing patterns and conventions identified
-- Dependencies and integration points
-- Risk assessment
-
-IMPLEMENTATION_PLAN:
-- Step-by-step implementation approach
-- File changes required
-- Testing strategy
-- Quality assurance requirements
-
-ACTION: READ_FILE (if needed)
-PATH: path/to/file
-
-Begin by analyzing the project and creating a comprehensive implementation plan.`)
-
-	return prompt.String()
+TASK: [Your concise task description for the engineer]`, req.Description, agentsMdContent)
 }
 
 func (em *EngineeringManager) processManagerResponse(ctx context.Context, req ImplementFeatureRequest, llmResponse string, projectCtx *ProjectContext) (*ImplementFeatureResponse, error) {
-	result := &ImplementFeatureResponse{
-		Success:          true,
-		FilesModified:    []string{},
-		CommandsExecuted: []string{},
-		BuildOutput:      "",
-		NextSteps:        "",
-	}
+	// The EM's job is to produce the next prompt for the engineer.
+	// We extract the task description and place it in the 'NextSteps' field for the orchestrator.
 
-	// Parse any READ_FILE actions the manager might have requested
-	actions := em.parseActions(llmResponse)
-
-	for _, action := range actions {
-		if action.Type == "READ_FILE" {
-			content, err := em.tools.ReadFile(action.Path)
-			if err != nil {
-				// Don't fail the entire process for missing files
-				continue
-			}
-			// Store the file content for potential use by other agents
-			projectCtx.ExistingFiles[action.Path] = content
+	// If AGENTS.md doesn't exist, create it.
+	if projectCtx.AgentsMd == "" {
+		initialContent := "# Agent Knowledge Base\n\nThis file is managed by the Engineering Manager agent to maintain context and learnings between tasks.\n"
+		err := em.tools.WriteFile("AGENTS.md", initialContent)
+		if err != nil {
+			// Log the error but don't fail the whole process
+			fmt.Printf("Error creating AGENTS.md: %v\n", err)
 		}
 	}
 
-	// Analyze the response to determine success and next steps
-	analysis := em.analyzeManagerResponse(llmResponse)
-	
-	if analysis.HasValidPlan {
-		result.Success = true
-		result.Message = "Implementation plan created successfully"
-		result.NextSteps = analysis.NextSteps
-	} else {
-		result.Success = false
-		result.Error = analysis.Issues
-		result.NextSteps = "Plan needs revision"
+	// Extract the task description from the LLM response.
+	taskDescription := strings.TrimSpace(llmResponse)
+	if strings.HasPrefix(taskDescription, "TASK:") {
+		taskDescription = strings.TrimSpace(strings.TrimPrefix(taskDescription, "TASK:"))
 	}
 
-	return result, nil
+	return &ImplementFeatureResponse{
+		Success:   true,
+		Message:   "Briefing for engineer created.",
+		NextSteps: taskDescription, // The orchestrator will use this as the input for the next agent.
+	}, nil
 }
 
-type ManagerAnalysis struct {
-	HasValidPlan bool
-	NextSteps    string
-	Issues       string
-	RiskLevel    string
+// DocumentTask is called at the end of a successful workflow to update the knowledge base.
+func (em *EngineeringManager) DocumentTask(ctx context.Context, result *WorkflowResult) error {
+	// 1. Read existing AGENTS.md
+	currentKnowledge, err := em.tools.ReadFile("AGENTS.md")
+	if err != nil {
+		// If it doesn't exist, start with a fresh slate.
+		currentKnowledge = "# Agent Knowledge Base\n\nThis file is managed by the Engineering Manager agent to maintain context and learnings between tasks.\n"
+	}
+
+	// 2. Build a prompt to ask the LLM to summarize and update the knowledge base
+	prompt := em.buildDocumentationPrompt(result, currentKnowledge)
+
+	// 3. Generate the updated knowledge base from the LLM
+	updatedKnowledge, err := em.llmClient.Generate(ctx, prompt)
+	if err != nil {
+		return fmt.Errorf("failed to generate documentation from LLM: %w", err)
+	}
+
+	// 4. Write the new content back to AGENTS.md
+	return em.tools.WriteFile("AGENTS.md", updatedKnowledge)
 }
 
-func (em *EngineeringManager) analyzeManagerResponse(response string) ManagerAnalysis {
-	analysis := ManagerAnalysis{}
-	
-	// Look for key sections in the response
-	hasAnalysis := strings.Contains(strings.ToLower(response), "analysis:")
-	hasPlan := strings.Contains(strings.ToLower(response), "implementation_plan:")
-	
-	// Check for planning completeness
-	planningKeywords := []string{
-		"step", "file", "test", "implement", "create", "modify", "build",
+func (em *EngineeringManager) buildDocumentationPrompt(result *WorkflowResult, currentKnowledge string) string {
+	var summary strings.Builder
+	summary.WriteString("**Workflow Summary:**\n")
+	summary.WriteString(fmt.Sprintf("- Success: %v\n", result.Success))
+	if !result.Success {
+		summary.WriteString(fmt.Sprintf("- Failure Reason: %s\n", result.FailureReason))
 	}
-	
-	keywordCount := 0
-	lowerResponse := strings.ToLower(response)
-	for _, keyword := range planningKeywords {
-		if strings.Contains(lowerResponse, keyword) {
-			keywordCount++
-		}
+	summary.WriteString(fmt.Sprintf("- Files Modified: %s\n", strings.Join(result.FilesModified, ", ")))
+	summary.WriteString("\n**Agent Contributions:**\n")
+	for role, agentSummary := range result.AgentSummaries {
+		summary.WriteString(fmt.Sprintf("- **%s**: %s (Success: %v)\n", role, agentSummary.TaskCompleted, agentSummary.Success))
 	}
 
-	// Check for risk indicators
-	riskKeywords := []string{
-		"risk", "concern", "dependency", "complex", "difficult", "challenge",
-	}
-	
-	riskCount := 0
-	for _, keyword := range riskKeywords {
-		if strings.Contains(lowerResponse, keyword) {
-			riskCount++
-		}
-	}
-
-	if riskCount > 2 {
-		analysis.RiskLevel = "high"
-	} else if riskCount > 0 {
-		analysis.RiskLevel = "medium"
-	} else {
-		analysis.RiskLevel = "low"
-	}
-
-	// Determine if plan is valid
-	if hasAnalysis && hasPlan && keywordCount >= 3 {
-		analysis.HasValidPlan = true
-		analysis.NextSteps = "Plan approved. Ready for Senior Engineer implementation."
-	} else {
-		analysis.HasValidPlan = false
-		
-		var issues []string
-		if !hasAnalysis {
-			issues = append(issues, "Missing project analysis")
-		}
-		if !hasPlan {
-			issues = append(issues, "Missing implementation plan")
-		}
-		if keywordCount < 3 {
-			issues = append(issues, "Plan lacks sufficient detail")
-		}
-		
-		analysis.Issues = strings.Join(issues, "; ")
-		analysis.NextSteps = "Plan needs more detail and analysis"
-	}
-
-	return analysis
+	return fmt.Sprintf(`You are the Engineering Manager, responsible for maintaining the team's collective knowledge.\n\n**Your Task:**\nUpdate the Agent Knowledge Base (` + "`AGENTS.md`" + `) with the results of the last workflow. \n- Integrate new learnings, architectural decisions, or coding patterns.\n- Do NOT remove existing valuable information unless it is explicitly replaced by a new standard.\n- Keep the document concise and well-organized.\n\n**Summary of Completed Workflow:**\n%s\n\n**Current Knowledge Base (AGENTS.md):**\n--- (start of file) ---\n%s\n--- (end of file) ---\n\n**Your Response:**\nRespond with ONLY the complete, updated content for ` + "`AGENTS.md`" + `.\n`,
+		summary.String(), currentKnowledge)
 }
 
-
-func (em *EngineeringManager) parseActions(response string) []Action {
-	var actions []Action
-	lines := strings.Split(response, "\n")
-	
-	var currentAction *Action
-	
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		
-		if strings.HasPrefix(line, "ACTION:") {
-			// Save previous action
-			if currentAction != nil {
-				actions = append(actions, *currentAction)
-			}
-			
-			// Start new action
-			actionType := strings.TrimSpace(strings.TrimPrefix(line, "ACTION:"))
-			currentAction = &Action{Type: actionType}
-		} else if currentAction != nil {
-			if strings.HasPrefix(line, "PATH:") {
-				currentAction.Path = strings.TrimSpace(strings.TrimPrefix(line, "PATH:"))
-			} else if strings.HasPrefix(line, "COMMAND:") {
-				currentAction.Command = strings.TrimSpace(strings.TrimPrefix(line, "COMMAND:"))
-			}
-		}
-	}
-	
-	// Save final action
-	if currentAction != nil {
-		actions = append(actions, *currentAction)
-	}
-	
-	return actions
-}

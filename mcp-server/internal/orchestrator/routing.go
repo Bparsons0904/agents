@@ -198,7 +198,7 @@ func (re *RoutingEngine) RouteAgent(currentAgent AgentRole, result *agent.Implem
 // Helper functions to analyze agent results
 
 func (re *RoutingEngine) isBuildError(result *agent.ImplementFeatureResponse) bool {
-	if result.Error == "" && result.BuildOutput == "" {
+	if result.Error == "" {
 		return false
 	}
 	

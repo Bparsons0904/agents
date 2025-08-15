@@ -1,6 +1,9 @@
 package agent
 
-import "fmt"
+import (
+	"fmt"
+	"mcp-server/internal/config"
+)
 
 type DefaultAgentFactory struct{}
 
@@ -8,12 +11,12 @@ func NewAgentFactory() AgentFactory {
 	return &DefaultAgentFactory{}
 }
 
-func (f *DefaultAgentFactory) CreateAgent(role AgentRole, llmClient LLMClient, toolSet ToolSet, restrictions CommandRestrictions) (Agent, error) {
+func (f *DefaultAgentFactory) CreateAgent(role AgentRole, llmClient LLMClient, toolSet ToolSet, restrictions CommandRestrictions, cfg config.WorkflowAgentConfig) (Agent, error) {
 	switch role {
 	case AgentRoleEM:
 		return NewEngineeringManager(llmClient, toolSet, restrictions), nil
 	case AgentRoleEngineer:
-		return NewSeniorEngineer(llmClient, toolSet, restrictions), nil
+		return NewSeniorEngineer(llmClient, toolSet, restrictions, cfg), nil
 	case AgentRoleQA:
 		return NewSeniorQAEngineer(llmClient, toolSet, restrictions), nil
 	case AgentRoleTechLead:

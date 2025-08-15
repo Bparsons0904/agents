@@ -537,3 +537,8 @@ func (tl *SeniorTechLead) parseActions(response string) []Action {
 
 	return actions
 }
+
+// DocumentTask for SeniorTechLead is a no-op
+func (tl *SeniorTechLead) DocumentTask(ctx context.Context, result *WorkflowResult) error {
+	return nil
+}

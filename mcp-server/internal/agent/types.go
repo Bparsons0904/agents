@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"mcp-server/internal/config"
 	"time"
 )
 
@@ -79,6 +80,7 @@ type AgentTransition struct {
 // Core Interfaces
 type Agent interface {
 	ImplementFeature(ctx context.Context, req ImplementFeatureRequest) (*ImplementFeatureResponse, error)
+	DocumentTask(ctx context.Context, result *WorkflowResult) error
 }
 
 type WorkflowOrchestrator interface {
@@ -107,5 +109,5 @@ type CommandRestrictions interface {
 
 // Agent Factory Interface
 type AgentFactory interface {
-	CreateAgent(role AgentRole, llmClient LLMClient, toolSet ToolSet, restrictions CommandRestrictions) (Agent, error)
+	CreateAgent(role AgentRole, llmClient LLMClient, toolSet ToolSet, restrictions CommandRestrictions, cfg config.WorkflowAgentConfig) (Agent, error)
 }
