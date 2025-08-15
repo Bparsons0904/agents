@@ -1,0 +1,41 @@
+[agent]
+role = "senior_engineer"
+model = "qwen3:14b"
+max_tokens = 4000
+
+[commands]
+allowed = [
+    # Go commands
+    "go build", "go test", "go fmt", "go mod tidy", "go run",
+    "go build ./...", "go test ./...", "go mod download",
+    
+    # Node.js commands  
+    "npm install", "npm run build", "npm test", "npm run dev",
+    "npm ci", "yarn install", "yarn build", "yarn test",
+    
+    # Python commands
+    "python -m pytest", "python -m pip install", "python setup.py",
+    "pip install", "pytest", "python -m venv",
+    
+    # Build tools
+    "make", "make build", "make test", "make clean",
+    
+    # Git operations
+    "git add", "git status", "git diff", "git log --oneline -10",
+    "git log --oneline", "git show", "git branch",
+    
+    # File operations
+    "ls", "cat", "head", "tail", "find", "grep",
+    "mkdir", "touch", "cp", "mv"
+]
+
+[restrictions]
+blocked_patterns = [
+    "sudo", "rm -rf", "chmod +x", "systemctl", 
+    "iptables", "mount", "cd /", "cat /etc/",
+    "passwd", "usermod", "userdel", "groupmod",
+    "service", "systemd", "crontab", "at",
+    "wget", "curl http", "curl https", "ssh",
+    "scp", "rsync", "dd", "fdisk", "mkfs",
+    "chown", "chgrp", "umount", "kill -9"
+]
