@@ -1,0 +1,83 @@
+version: "3.8"
+
+services:
+  # Model downloader init container
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: agent-ollama-init
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    command: >
+      sh -c "
+        ollama serve &
+        sleep 10 &&
+        ollama pull qwen3:14b-q4_K_M &&
+        echo 'Model downloaded successfully' &&
+        pkill ollama
+      "
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agent-ollama
+    ports:
+      - "0.0.0.0:11434:11434" # Ollama API port - accessible on all interfaces
+    volumes:
+      - ollama_data:/root/.ollama # Persist downloaded models
+    environment:
+      - OLLAMA_HOST=0.0.0.0 # Allow external connections
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+
+  # MCP Server (to be implemented)
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    container_name: agent-mcp-server
+    ports:
+      - "0.0.0.0:8080:8080" # MCP server API port - accessible on all interfaces
+    volumes:
+      - ./projects:/app/projects # Mount projects directory
+      - /var/run/docker.sock:/var/run/docker.sock # For potential container operations
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - PROJECT_ROOT=/app/projects
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    # Uncomment when ready to build MCP server
+    # profiles:
+    #   - mcp
+
+volumes:
+  ollama_data:
+    driver: local
+
+networks:
+  default:
+    name: agent-network
