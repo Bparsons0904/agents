@@ -9,6 +9,7 @@ import (
 
 	"mcp-server/internal/agent"
 	"mcp-server/internal/config"
+	"mcp-server/internal/debug"
 	"mcp-server/internal/llm"
 	"mcp-server/internal/orchestrator"
 	"mcp-server/internal/tools"
@@ -120,8 +121,12 @@ func main() {
 		llmClient := llm.NewOllamaClient(ollamaURL, defaultModel)
 		orchestratorInstance := orchestrator.NewWorkflowOrchestrator(llmClient, toolSet, workflowConfig)
 		
+		// Initialize debug logger
+		debugConfig := config.GetDebugConfig()
+		debugLogger := debug.NewDebugLogger(debugConfig.Enabled, debugConfig.LogDir)
+		
 		// Register all agents
-		agentFactory := agent.NewAgentFactory()
+		agentFactory := agent.NewAgentFactory(debugLogger)
 		for roleName, agentConfig := range workflowConfig.Agents {
 			role := agent.AgentRole(agentConfig.Role)
 			agentLLMClient := llm.NewOllamaClient(ollamaURL, agentConfig.Model)

@@ -35,7 +35,7 @@ func (fs *FileSystem) ReadFile(path string) (string, error) {
 	}
 
 	rel, err := filepath.Rel(absWorkingDir, absPath)
-	if err != nil || len(rel) > 0 && rel[0] == '.' && rel[1] == '.' {
+	if err != nil || (len(rel) > 1 && rel[0] == '.' && rel[1] == '.') || strings.HasPrefix(rel, "../") {
 		return "", fmt.Errorf("access denied: path outside working directory")
 	}
 
@@ -65,7 +65,7 @@ func (fs *FileSystem) WriteFile(path, content string) error {
 	}
 
 	rel, err := filepath.Rel(absWorkingDir, absPath)
-	if err != nil || len(rel) > 0 && rel[0] == '.' && rel[1] == '.' {
+	if err != nil || (len(rel) > 1 && rel[0] == '.' && rel[1] == '.') || strings.HasPrefix(rel, "../") {
 		return fmt.Errorf("access denied: path outside working directory")
 	}
 
@@ -101,7 +101,7 @@ func (fs *FileSystem) ListFiles(path string) ([]string, error) {
 	}
 
 	rel, err := filepath.Rel(absWorkingDir, absPath)
-	if err != nil || len(rel) > 0 && rel[0] == '.' && rel[1] == '.' {
+	if err != nil || (len(rel) > 1 && rel[0] == '.' && rel[1] == '.') || strings.HasPrefix(rel, "../") {
 		return nil, fmt.Errorf("access denied: path outside working directory")
 	}
 
@@ -145,7 +145,7 @@ func (fs *FileSystem) FindFiles(pattern string, searchPath string) ([]string, er
 	}
 
 	rel, err := filepath.Rel(absWorkingDir, absPath)
-	if err != nil || len(rel) > 0 && rel[0] == '.' && rel[1] == '.' {
+	if err != nil || (len(rel) > 1 && rel[0] == '.' && rel[1] == '.') || strings.HasPrefix(rel, "../") {
 		return nil, fmt.Errorf("access denied: path outside working directory")
 	}
 

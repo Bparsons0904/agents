@@ -3,49 +3,113 @@ package agent
 import (
 	"context"
 	"fmt"
+	"mcp-server/internal/debug"
 	"strings"
+	"time"
 )
 
 type EngineeringManager struct {
 	llmClient    LLMClient
 	tools        ToolSet
 	restrictions CommandRestrictions
+	debugLogger  *debug.DebugLogger
 }
 
-func NewEngineeringManager(llmClient LLMClient, tools ToolSet, restrictions CommandRestrictions) *EngineeringManager {
+func NewEngineeringManager(llmClient LLMClient, tools ToolSet, restrictions CommandRestrictions, debugLogger *debug.DebugLogger) *EngineeringManager {
 	return &EngineeringManager{
 		llmClient:    llmClient,
 		tools:        tools,
 		restrictions: restrictions,
+		debugLogger:  debugLogger,
 	}
 }
 
 func (em *EngineeringManager) ImplementFeature(ctx context.Context, req ImplementFeatureRequest) (*ImplementFeatureResponse, error) {
+	// Debug: Log what the EM is thinking about
+	em.debugLogger.LogThought(debug.AgentThought{
+		Timestamp:   time.Now(),
+		Agent:       "EngineeringManager",
+		Phase:       "feature_analysis",
+		Task:        req.Description,
+		Context:     fmt.Sprintf("Working Directory: %s, Project Type: %s", req.WorkingDirectory, req.ProjectType),
+		Thinking:    "I need to analyze this feature request, understand the project context, and create a detailed implementation plan for the Senior Engineer. Let me gather project information and examine existing patterns.",
+		PlanOfAction: "1. Set working directory\n2. Gather project context (files, git status, patterns)\n3. Analyze feature requirements\n4. Create structured briefing for engineer\n5. Execute any necessary setup commands",
+	})
+
 	// Step 1: Set working directory if specified
 	if req.WorkingDirectory != "" {
 		em.tools.SetWorkingDirectory(req.WorkingDirectory)
+		em.debugLogger.LogAction(debug.AgentAction{
+			Timestamp:  time.Now(),
+			Agent:      "EngineeringManager",
+			ActionType: "set_working_directory",
+			FilePath:   req.WorkingDirectory,
+			Result:     "Working directory set",
+			Success:    true,
+		})
 	}
 
 	// Step 2: Gather comprehensive project context
+	em.debugLogger.LogThought(debug.AgentThought{
+		Timestamp:   time.Now(),
+		Agent:       "EngineeringManager",
+		Phase:       "context_gathering",
+		Task:        "Project Analysis",
+		Thinking:    "Now I need to understand the current project structure, examine existing files, check git status, and identify patterns the engineer should follow.",
+		PlanOfAction: "Scan project files, analyze existing code patterns, check git history for context",
+	})
+
 	context, err := em.gatherProjectContext()
 	if err != nil {
+		em.debugLogger.LogError("EngineeringManager", "context_gathering", err, "Failed to gather project context")
 		return &ImplementFeatureResponse{
 			Success: false,
 			Error:   fmt.Sprintf("Failed to gather project context: %v", err),
 		}, nil
 	}
 
+	contextSize := len(context.GitStatus) + len(context.GitLog) + len(context.ClaudeMd) + len(context.AgentsMd) + len(context.ProjectStructure)
+	for _, content := range context.ExistingFiles {
+		contextSize += len(content)
+	}
+	em.debugLogger.LogAction(debug.AgentAction{
+		Timestamp:  time.Now(),
+		Agent:      "EngineeringManager",
+		ActionType: "gather_context",
+		Result:     fmt.Sprintf("Gathered project context: %d characters, %d files", contextSize, len(context.ExistingFiles)),
+		Success:    true,
+	})
+
 	// Step 3: Build system prompt with all context
+	em.debugLogger.LogThought(debug.AgentThought{
+		Timestamp:   time.Now(),
+		Agent:       "EngineeringManager",
+		Phase:       "plan_creation",
+		Task:        "Creating Implementation Plan",
+		Thinking:    "Based on the project context and feature requirements, I need to create a detailed, structured plan that guides the Senior Engineer. This should include specific files to examine, implementation approach, potential issues, and success criteria.",
+		PlanOfAction: "Generate comprehensive briefing with task breakdown, context, file guidance, and implementation strategy",
+	})
+
 	prompt := em.buildSystemPrompt(req, context)
 
 	// Step 4: Generate implementation plan from LLM
 	response, err := em.llmClient.Generate(ctx, prompt)
 	if err != nil {
+		em.debugLogger.LogError("EngineeringManager", "llm_generation", err, "LLM generation failed")
 		return &ImplementFeatureResponse{
 			Success: false,
 			Error:   fmt.Sprintf("LLM generation failed: %v", err),
 		}, nil
 	}
+
+	em.debugLogger.LogAction(debug.AgentAction{
+		Timestamp:  time.Now(),
+		Agent:      "EngineeringManager",
+		ActionType: "llm_generation",
+		Content:    truncateString(response, 500),
+		Result:     "Generated implementation plan",
+		Success:    true,
+	})
 
 	// Step 5: Parse and validate the plan
 	return em.processManagerResponse(ctx, req, response, context)
@@ -82,7 +146,10 @@ func (em *EngineeringManager) gatherProjectContext() (*ProjectContext, error) {
 		ctx.ClaudeMd = claudeMd
 	}
 
-	if agentsMd, err := em.tools.ReadFile("AGENTS.md"); err == nil {
+	// Try both locations for AGENTS.md (new structure first, then fallback)
+	if agentsMd, err := em.tools.ReadFile("agents/AGENTS.md"); err == nil {
+		ctx.AgentsMd = agentsMd
+	} else if agentsMd, err := em.tools.ReadFile("AGENTS.md"); err == nil {
 		ctx.AgentsMd = agentsMd
 	}
 
@@ -261,15 +328,15 @@ func (em *EngineeringManager) processManagerResponse(ctx context.Context, req Im
 		Message:          "Project setup and briefing completed",
 	}
 
-	// If AGENTS.md doesn't exist, create it.
+	// If AGENTS.md doesn't exist, create it in the new location
 	if projectCtx.AgentsMd == "" {
 		initialContent := "# Agent Knowledge Base\n\nThis file is managed by the Engineering Manager agent to maintain context and learnings between tasks.\n"
-		err := em.tools.WriteFile("AGENTS.md", initialContent)
+		err := em.tools.WriteFile("agents/AGENTS.md", initialContent)
 		if err != nil {
 			// Log the error but don't fail the whole process
-			fmt.Printf("Error creating AGENTS.md: %v\n", err)
+			fmt.Printf("Error creating agents/AGENTS.md: %v\n", err)
 		} else {
-			result.FilesModified = append(result.FilesModified, "AGENTS.md")
+			result.FilesModified = append(result.FilesModified, "agents/AGENTS.md")
 		}
 	}
 
@@ -388,11 +455,20 @@ func (em *EngineeringManager) extractTaskDescription(llmResponse string) string 
 
 // DocumentTask is called at the end of a successful workflow to update the knowledge base.
 func (em *EngineeringManager) DocumentTask(ctx context.Context, result *WorkflowResult) error {
-	// 1. Read existing AGENTS.md
-	currentKnowledge, err := em.tools.ReadFile("AGENTS.md")
-	if err != nil {
-		// If it doesn't exist, start with a fresh slate.
+	// 1. Read existing AGENTS.md (try new location first, then fallback)
+	var currentKnowledge string
+	var agentsFile string
+	
+	if knowledge, err := em.tools.ReadFile("agents/AGENTS.md"); err == nil {
+		currentKnowledge = knowledge
+		agentsFile = "agents/AGENTS.md"
+	} else if knowledge, err := em.tools.ReadFile("AGENTS.md"); err == nil {
+		currentKnowledge = knowledge
+		agentsFile = "AGENTS.md"
+	} else {
+		// If it doesn't exist, start with a fresh slate in the new location
 		currentKnowledge = "# Agent Knowledge Base\n\nThis file is managed by the Engineering Manager agent to maintain context and learnings between tasks.\n"
+		agentsFile = "agents/AGENTS.md"
 	}
 
 	// 2. Build a prompt to ask the LLM to summarize and update the knowledge base
@@ -405,7 +481,7 @@ func (em *EngineeringManager) DocumentTask(ctx context.Context, result *Workflow
 	}
 
 	// 4. Write the new content back to AGENTS.md
-	return em.tools.WriteFile("AGENTS.md", updatedKnowledge)
+	return em.tools.WriteFile(agentsFile, updatedKnowledge)
 }
 
 // buildReplanningPrompt creates an enhanced replanning prompt based on specific engineer feedback
@@ -473,5 +549,13 @@ func (em *EngineeringManager) buildDocumentationPrompt(result *WorkflowResult, c
 
 	return fmt.Sprintf(`You are the Engineering Manager, responsible for maintaining the team's collective knowledge.\n\n**Your Task:**\nUpdate the Agent Knowledge Base (` + "`AGENTS.md`" + `) with the results of the last workflow. \n- Integrate new learnings, architectural decisions, or coding patterns.\n- Do NOT remove existing valuable information unless it is explicitly replaced by a new standard.\n- Keep the document concise and well-organized.\n\n**Summary of Completed Workflow:**\n%s\n\n**Current Knowledge Base (AGENTS.md):**\n--- (start of file) ---\n%s\n--- (end of file) ---\n\n**Your Response:**\nRespond with ONLY the complete, updated content for ` + "`AGENTS.md`" + `.\n`,
 		summary.String(), currentKnowledge)
+}
+
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "... [truncated]"
 }
 

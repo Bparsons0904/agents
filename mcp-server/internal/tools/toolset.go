@@ -6,6 +6,7 @@ type ToolSet struct {
 	filesystem  *FileSystem
 	git         *GitOperations
 	commands    *CommandValidator
+	webSearch   *WebSearch
 	workingDir  string
 }
 
@@ -18,6 +19,7 @@ func NewToolSet(commands config.CommandsSection, restrictions config.Restriction
 		filesystem: NewFileSystem(workingDir),
 		git:        NewGitOperations(workingDir),
 		commands:   NewCommandValidator(commands.Allowed, restrictions.BlockedPatterns, workingDir),
+		webSearch:  NewWebSearch(),
 		workingDir: workingDir,
 	}
 }
@@ -95,4 +97,12 @@ func (ts *ToolSet) ListFiles(path string) ([]string, error) {
 
 func (ts *ToolSet) FindFiles(pattern string, searchPath string) ([]string, error) {
 	return ts.filesystem.FindFiles(pattern, searchPath)
+}
+
+func (ts *ToolSet) SearchForSolution(query string) (*SearchResponse, error) {
+	return ts.webSearch.SearchForSolution(query)
+}
+
+func (ts *ToolSet) SearchForError(errorMessage string) (*SearchResponse, error) {
+	return ts.webSearch.SearchForError(errorMessage)
 }

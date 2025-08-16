@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"mcp-server/internal/config"
+	"mcp-server/internal/tools"
 	"time"
 )
 
@@ -102,6 +103,8 @@ type ToolSet interface {
 	SetWorkingDirectory(dir string)
 	ListFiles(path string) ([]string, error)
 	FindFiles(pattern string, searchPath string) ([]string, error)
+	SearchForSolution(query string) (*tools.SearchResponse, error)
+	SearchForError(errorMessage string) (*tools.SearchResponse, error)
 }
 
 type CommandRestrictions interface {

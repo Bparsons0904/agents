@@ -167,11 +167,20 @@ func (re *RoutingEngine) initializeRules() {
 		{
 			FromAgent: AgentRoleTechLead,
 			Condition: func(result *agent.ImplementFeatureResponse) bool {
+				return !result.Success && re.isStructuredRejection(result)
+			},
+			NextAgent: AgentRoleEM,
+			Reason:    "Tech Lead structured rejection - routing to EM as requested",
+			Priority:  20,
+		},
+		{
+			FromAgent: AgentRoleTechLead,
+			Condition: func(result *agent.ImplementFeatureResponse) bool {
 				return !result.Success && re.isArchitectureIssue(result)
 			},
 			NextAgent: AgentRoleEM,
 			Reason:    "Architecture concerns, need replanning",
-			Priority:  10,
+			Priority:  15,
 		},
 		{
 			FromAgent: AgentRoleTechLead,
@@ -354,6 +363,32 @@ func (re *RoutingEngine) isArchitectureIssue(result *agent.ImplementFeatureRespo
 	}
 	
 	for _, pattern := range architectureIssues {
+		if strings.Contains(errorText, pattern) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+func (re *RoutingEngine) isStructuredRejection(result *agent.ImplementFeatureResponse) bool {
+	if result.Error == "" {
+		return false
+	}
+	
+	errorText := strings.ToLower(result.Error)
+	
+	// Look for structured rejection patterns from enhanced Tech Lead
+	structuredPatterns := []string{
+		"rejection_reason:",
+		"route_to: engineering_manager",
+		"requirements_not_met",
+		"security_concerns", 
+		"unnecessary_duplication",
+		"pattern_deviation",
+	}
+	
+	for _, pattern := range structuredPatterns {
 		if strings.Contains(errorText, pattern) {
 			return true
 		}

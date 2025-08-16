@@ -23,17 +23,25 @@ tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files",
 [agents.senior_tech_lead]
 role = "senior_tech_lead"
 model = "qwen3:14b-q4_K_M"
-max_iterations = 2
-tools = ["read_file", "write_file", "execute_command", "git_diff", "http_request", "list_files", "find_files"]
+max_iterations = 3
+tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files"]
 
 # Enhanced command allowlist for project management and self-recovery
 [commands]
 allowed = [
-    # Go commands - Enhanced for project setup
+    # Go commands - Enhanced for project setup with fallback strategies
     "go build", "go test", "go fmt", "go vet", "go mod tidy", "go run",
     "go build ./...", "go test ./...", "go mod download", "go mod init",
     "go build .", "go test .", "go clean", "go env", "go get",
     "go build -o", "go mod init *", "go work init",
+    
+    # Build fallback strategies for common issues
+    "go build -buildvcs=false .", "go build -buildvcs=false ./...",
+    "go build -mod=readonly .", "go build -mod=vendor .", "go build -mod=mod .",
+    "go clean -modcache", "go mod tidy -go=1.23", "go env GOPROXY",
+    
+    # Progressive validation commands
+    "go fmt -n .", "go vet -n .", "gofmt -l .", "gofmt -w .",
     
     # Node.js commands  
     "npm install", "npm run build", "npm test", "npm run dev",

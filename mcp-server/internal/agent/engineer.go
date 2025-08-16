@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"mcp-server/internal/config"
+	"mcp-server/internal/tools"
 	"strings"
 	"time"
 )
@@ -106,8 +107,17 @@ func (se *SeniorEngineer) ImplementFeature(
 		}
 
 		// --- Handle Failure ---
+		// Try smart error recovery before categorizing - check both error and build output
+		fullErrorContext := result.Error
+		if result.BuildOutput != "" {
+			fullErrorContext += "\n" + result.BuildOutput
+		}
+		if recoveryResult := se.attemptErrorRecovery(ctx, fullErrorContext, attempts); recoveryResult != nil {
+			return recoveryResult, nil
+		}
+
 		// Categorize the current error
-		newErrorCategory := se.categorizeError(result.Error)
+		newErrorCategory := se.categorizeError(fullErrorContext)
 		
 		// Check if we're dealing with a new type of error
 		if newErrorCategory != currentErrorCategory {
@@ -135,6 +145,185 @@ func (se *SeniorEngineer) ImplementFeature(
 	// If we've exhausted all attempts
 	result.Error = fmt.Sprintf("Agent failed after %d attempts. Last error: %s", maxAttempts, result.Error)
 	return result, nil
+}
+
+// attemptErrorRecovery tries to automatically fix common errors
+func (se *SeniorEngineer) attemptErrorRecovery(ctx context.Context, errorMsg string, attempts int) *ImplementFeatureResponse {
+	errorCategory := se.categorizeError(errorMsg)
+	
+	// Try recovery immediately for critical module issues, otherwise after 1st attempt
+	criticalIssues := map[string]bool{
+		"missing_package": true,
+	}
+	
+	if !criticalIssues[errorCategory] && attempts < 1 {
+		return nil
+	}
+	
+	log.Printf("Engineer: Attempting error recovery for category '%s' on attempt %d", errorCategory, attempts)
+	
+	switch errorCategory {
+	case "build_failure":
+		if result := se.tryBuildFallback(ctx, errorMsg); result != nil {
+			log.Printf("Engineer: Build fallback recovery succeeded")
+			return result
+		}
+	case "missing_package":
+		if result := se.tryModuleFix(ctx, errorMsg); result != nil {
+			log.Printf("Engineer: Module fix recovery succeeded")
+			return result
+		}
+	case "unknown_error":
+		if result := se.searchForSolution(ctx, errorMsg); result != nil {
+			log.Printf("Engineer: Web search recovery succeeded")
+			return result
+		}
+	}
+	
+	log.Printf("Engineer: Error recovery failed for category '%s'", errorCategory)
+	return nil
+}
+
+// tryBuildFallback attempts different build commands for common VCS/module issues
+func (se *SeniorEngineer) tryBuildFallback(ctx context.Context, errorMsg string) *ImplementFeatureResponse {
+	errorLower := strings.ToLower(errorMsg)
+	
+	var fallbackCommands []string
+	
+	if strings.Contains(errorLower, "vcs") || strings.Contains(errorLower, "git") {
+		fallbackCommands = []string{
+			"go build -buildvcs=false .",
+			"go build -buildvcs=false ./...",
+		}
+	} else if strings.Contains(errorLower, "module") {
+		fallbackCommands = []string{
+			"go build -mod=readonly .",
+			"go build -mod=vendor .",
+			"go build -mod=mod .",
+		}
+	}
+	
+	for _, cmd := range fallbackCommands {
+		if err := se.restrictions.ValidateCommand(cmd); err == nil {
+			output, err := se.tools.ExecuteCommand(cmd)
+			if err == nil {
+				return &ImplementFeatureResponse{
+					Success:          true,
+					Message:          "Recovered using build fallback",
+					CommandsExecuted: []string{cmd},
+					BuildOutput:      output,
+				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// tryModuleFix attempts to fix Go module issues
+func (se *SeniorEngineer) tryModuleFix(ctx context.Context, errorMsg string) *ImplementFeatureResponse {
+	fixCommands := []string{
+		"go mod tidy",
+		"go mod download",
+		"go clean -modcache",
+	}
+	
+	for _, cmd := range fixCommands {
+		if err := se.restrictions.ValidateCommand(cmd); err == nil {
+			output, err := se.tools.ExecuteCommand(cmd)
+			if err == nil {
+				// Try building again after the fix
+				if err := se.restrictions.ValidateCommand("go build ."); err == nil {
+					buildOutput, buildErr := se.tools.ExecuteCommand("go build .")
+					if buildErr == nil {
+						return &ImplementFeatureResponse{
+							Success:          true,
+							Message:          "Recovered using module fix",
+							CommandsExecuted: []string{cmd, "go build ."},
+							BuildOutput:      output + "\n" + buildOutput,
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// searchForSolution uses web search to find solutions for unknown errors
+func (se *SeniorEngineer) searchForSolution(ctx context.Context, errorMsg string) *ImplementFeatureResponse {
+	searchResp, err := se.tools.SearchForError(errorMsg)
+	if err != nil {
+		return nil
+	}
+	
+	if len(searchResp.Results) == 0 {
+		return nil
+	}
+	
+	// Extract potential solutions from search results
+	solutions := se.extractSolutions(searchResp.Results)
+	
+	// Try the most promising solution
+	for _, solution := range solutions {
+		if result := se.trySolution(ctx, solution); result != nil {
+			return result
+		}
+	}
+	
+	return nil
+}
+
+// extractSolutions analyzes search results to find actionable solutions
+func (se *SeniorEngineer) extractSolutions(results []tools.SearchResult) []string {
+	var solutions []string
+	
+	for _, result := range results {
+		snippet := strings.ToLower(result.Snippet)
+		
+		// Look for command patterns in snippets
+		if strings.Contains(snippet, "go build") {
+			if strings.Contains(snippet, "-buildvcs=false") {
+				solutions = append(solutions, "go build -buildvcs=false .")
+			}
+		}
+		if strings.Contains(snippet, "go mod tidy") {
+			solutions = append(solutions, "go mod tidy")
+		}
+		if strings.Contains(snippet, "go clean") {
+			solutions = append(solutions, "go clean -modcache")
+		}
+	}
+	
+	return solutions
+}
+
+// trySolution attempts to execute a suggested solution
+func (se *SeniorEngineer) trySolution(ctx context.Context, solution string) *ImplementFeatureResponse {
+	if err := se.restrictions.ValidateCommand(solution); err != nil {
+		return nil
+	}
+	
+	output, err := se.tools.ExecuteCommand(solution)
+	if err != nil {
+		return nil
+	}
+	
+	// Test if the solution worked by trying a build
+	if err := se.restrictions.ValidateCommand("go build ."); err == nil {
+		buildOutput, buildErr := se.tools.ExecuteCommand("go build .")
+		if buildErr == nil {
+			return &ImplementFeatureResponse{
+				Success:          true,
+				Message:          "Recovered using web search solution",
+				CommandsExecuted: []string{solution, "go build ."},
+				BuildOutput:      output + "\n" + buildOutput,
+			}
+		}
+	}
+	
+	return nil
 }
 
 func (se *SeniorEngineer) buildSystemPrompt(
@@ -483,6 +672,14 @@ func (se *SeniorEngineer) categorizeError(errorMsg string) string {
 	}
 	if strings.Contains(errorLower, "missing dependency") || strings.Contains(errorLower, "setup") {
 		return "setup_issue" // Should go back to EM
+	}
+	
+	// Module and dependency issues - HIGH PRIORITY for auto-fix
+	if strings.Contains(errorLower, "go mod tidy") || strings.Contains(errorLower, "updates to go.mod needed") {
+		return "missing_package"
+	}
+	if strings.Contains(errorLower, "go.mod") || strings.Contains(errorLower, "module") {
+		return "missing_package"
 	}
 	
 	// Go-specific compilation errors

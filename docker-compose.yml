@@ -37,10 +37,14 @@ services:
       - ./projects:/app/projects # Mount projects directory
       - ./test-projects:/app/test-projects # Mount test projects directory  
       - ./mcp-server/config:/app/config # Mount config directory
+      - ./debug-logs:/app/debug-logs # Mount debug logs directory
     environment:
       - OLLAMA_URL=http://ollama:11434
       - PROJECT_ROOT=/app/projects
       - PORT=8080
+      - AGENT_DEBUG=true
+      - AGENT_DEBUG_DIR=/app/debug-logs
+      - AGENT_DEBUG_VERBOSE=true
     depends_on:
       - ollama
     restart: unless-stopped
