@@ -6,25 +6,25 @@ timeout_minutes = 20
 role = "engineering_manager"
 model = "qwen3:14b-q4_K_M"
 max_iterations = 4
-tools = ["read_file", "write_file", "execute_command", "git_status", "git_log", "git_diff", "list_files", "find_files"]
+tools = ["read_file", "write_file", "execute_command", "git_status", "git_log", "git_diff", "list_files", "find_files", "sequential_thinking"]
 
 [agents.senior_engineer]
 role = "senior_engineer" 
 model = "qwen3:14b-q4_K_M"
 max_iterations = 5
-tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files"]
+tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files", "sequential_thinking"]
 
 [agents.senior_qa]
 role = "senior_qa"
 model = "qwen3:14b-q4_K_M" 
 max_iterations = 2
-tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files"]
+tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files", "sequential_thinking"]
 
 [agents.senior_tech_lead]
 role = "senior_tech_lead"
 model = "qwen3:14b-q4_K_M"
 max_iterations = 3
-tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files"]
+tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files", "sequential_thinking"]
 
 # Enhanced command allowlist for project management and self-recovery
 [commands]
@@ -34,6 +34,15 @@ allowed = [
     "go build ./...", "go test ./...", "go mod download", "go mod init",
     "go build .", "go test .", "go clean", "go env", "go get",
     "go build -o", "go mod init *", "go work init",
+    
+    # Go mod edit commands - Essential for fixing module declarations
+    "go mod edit", "go mod edit -module", "go mod edit -module=*",
+    "go mod edit -go=*", "go mod edit -require=*", "go mod edit -droprequire=*",
+    "go mod edit -replace=*", "go mod edit -dropreplace=*",
+    
+    # Additional Go dependency management commands
+    "go get -u", "go get -u all", "go get ./...", "go list", "go list -m all",
+    "go mod why", "go mod graph", "go mod verify", "go version",
     
     # Build fallback strategies for common issues
     "go build -buildvcs=false .", "go build -buildvcs=false ./...",

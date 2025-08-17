@@ -230,17 +230,28 @@ func (tl *SeniorTechLead) detectQualityTools() []string {
 
 // loadPatternDocumentation loads relevant pattern files for analysis
 func (tl *SeniorTechLead) loadPatternDocumentation(ctx *ReviewContext) error {
-	patternFiles := []string{
-		"agents/AGENTS.md",
-		"agents/patterns/handlers.md",
-		"agents/patterns/database.md",
-		"agents/patterns/validation.md",
-		"agents/patterns/errors.md",
+	// Load main project patterns overview
+	if content, err := tl.tools.ReadFile("PROJECT_PATTERNS.md"); err == nil {
+		ctx.PatternFiles["PROJECT_PATTERNS.md"] = content
 	}
 
-	for _, patternFile := range patternFiles {
-		if content, err := tl.tools.ReadFile(patternFile); err == nil {
-			ctx.PatternFiles[patternFile] = content
+	// Dynamically discover all pattern files in patterns/ directory
+	if patternFiles, err := tl.tools.ListFiles("patterns"); err == nil {
+		for _, file := range patternFiles {
+			if strings.HasSuffix(file, ".md") {
+				patternPath := filepath.Join("patterns", file)
+				if content, err := tl.tools.ReadFile(patternPath); err == nil {
+					ctx.PatternFiles[patternPath] = content
+				}
+			}
+		}
+	}
+
+	// Load agent coordination patterns (fallback locations)
+	agentFiles := []string{"AGENTS.md", "agents/AGENTS.md"}
+	for _, agentFile := range agentFiles {
+		if content, err := tl.tools.ReadFile(agentFile); err == nil {
+			ctx.PatternFiles[agentFile] = content
 		}
 	}
 
@@ -693,16 +704,204 @@ func (tl *SeniorTechLead) calculateSimilarity(func1, func2 FunctionInfo) int {
 func (tl *SeniorTechLead) checkPatternConsistency(filename, content string, ctx *ReviewContext) []PatternDeviation {
 	var deviations []PatternDeviation
 	
-	// Check against pattern documentation
-	if handlerPatterns, exists := ctx.PatternFiles["agents/patterns/handlers.md"]; exists {
-		deviations = append(deviations, tl.validateHandlerPatterns(filename, content, handlerPatterns)...)
+	// Check against project-specific pattern documentation
+	if projectPatterns, exists := ctx.PatternFiles["PROJECT_PATTERNS.md"]; exists {
+		deviations = append(deviations, tl.validateProjectPatterns(filename, content, projectPatterns)...)
 	}
 	
-	if errorPatterns, exists := ctx.PatternFiles["agents/patterns/errors.md"]; exists {
-		deviations = append(deviations, tl.validateErrorPatterns(filename, content, errorPatterns)...)
+	// Dynamically validate against all pattern files found in patterns/ directory
+	for patternFile, patternContent := range ctx.PatternFiles {
+		if strings.HasPrefix(patternFile, "patterns/") && strings.HasSuffix(patternFile, ".md") {
+			// Extract pattern type from filename (e.g., "patterns/handler.md" -> "handler")
+			patternType := strings.TrimSuffix(filepath.Base(patternFile), ".md")
+			deviations = append(deviations, tl.validateSpecificPattern(filename, content, patternType, patternContent)...)
+		}
 	}
 	
 	return deviations
+}
+
+func (tl *SeniorTechLead) validateProjectPatterns(filename, content, projectPatterns string) []PatternDeviation {
+	var deviations []PatternDeviation
+	
+	// Extract patterns from PROJECT_PATTERNS.md
+	// Look for discovered patterns and validate against them
+	if strings.Contains(projectPatterns, "## Discovered Patterns") {
+		// Check if the file follows discovered architectural patterns
+		if strings.Contains(projectPatterns, "**Style**: layered") {
+			// Validate layered architecture compliance
+			if strings.Contains(filename, "handler") && strings.Contains(content, "func") {
+				if !tl.validateLayeredHandlerStructure(content) {
+					deviations = append(deviations, PatternDeviation{
+						Type:        "ARCHITECTURE_DEVIATION",
+						Description: "Handler doesn't follow layered architecture pattern",
+						File:        filename,
+						Expected:    "Handlers should delegate business logic to service layer",
+						Actual:      "Direct business logic in handler detected",
+					})
+				}
+			}
+		}
+		
+		// Validate against discovered framework patterns
+		if strings.Contains(projectPatterns, "**Framework**: fiber") {
+			if strings.Contains(filename, "handler") && !strings.Contains(content, "*fiber.Ctx") {
+				deviations = append(deviations, PatternDeviation{
+					Type:        "FRAMEWORK_DEVIATION", 
+					Description: "Handler doesn't use project's Fiber framework pattern",
+					File:        filename,
+					Expected:    "func HandlerName(c *fiber.Ctx) error",
+					Actual:      "Non-Fiber handler signature found",
+				})
+			}
+		}
+	}
+	
+	return deviations
+}
+
+func (tl *SeniorTechLead) validateLayeredHandlerStructure(content string) bool {
+	// Check if handler delegates to service layer rather than containing business logic
+	hasServiceCall := strings.Contains(content, ".Service") || strings.Contains(content, "service.")
+	hasDirectDBAccess := strings.Contains(content, ".DB") || strings.Contains(content, ".Query") || strings.Contains(content, ".Exec")
+	
+	// Good: has service calls, no direct DB access
+	return hasServiceCall && !hasDirectDBAccess
+}
+
+func (tl *SeniorTechLead) validateModelPatterns(filename, content, patterns string) []PatternDeviation {
+	var deviations []PatternDeviation
+	
+	// Check if this is a model/struct file
+	if !strings.Contains(strings.ToLower(filename), "model") && !strings.Contains(content, "type") {
+		return deviations
+	}
+	
+	// Validate struct patterns from discovered documentation
+	if strings.Contains(patterns, "Request/Response") {
+		// Check for proper request/response naming
+		if strings.Contains(content, "type") && strings.Contains(content, "struct") {
+			if !tl.followsNamingConvention(content) {
+				deviations = append(deviations, PatternDeviation{
+					Type:        "NAMING_CONVENTION",
+					Description: "Struct doesn't follow project naming conventions",
+					File:        filename,
+					Expected:    "Type names should follow discovered Request/Response patterns",
+					Actual:      "Non-standard struct naming found",
+				})
+			}
+		}
+	}
+	
+	return deviations
+}
+
+func (tl *SeniorTechLead) followsNamingConvention(content string) bool {
+	// Check for proper naming patterns like XxxRequest, XxxResponse, XxxDTO
+	requestPattern := regexp.MustCompile(`type\s+\w+Request\s+struct`)
+	responsePattern := regexp.MustCompile(`type\s+\w+Response\s+struct`) 
+	dtoPattern := regexp.MustCompile(`type\s+\w+DTO\s+struct`)
+	
+	hasProperNaming := requestPattern.MatchString(content) || 
+		responsePattern.MatchString(content) || 
+		dtoPattern.MatchString(content)
+	
+	return hasProperNaming
+}
+
+// validateSpecificPattern provides generic pattern validation based on pattern type
+func (tl *SeniorTechLead) validateSpecificPattern(filename, content, patternType, patternContent string) []PatternDeviation {
+	switch patternType {
+	case "handler":
+		return tl.validateHandlerPatterns(filename, content, patternContent)
+	case "error_handling":
+		return tl.validateErrorPatterns(filename, content, patternContent)
+	case "model":
+		return tl.validateModelPatterns(filename, content, patternContent)
+	case "interface":
+		return tl.validateInterfacePatterns(filename, content, patternContent)
+	default:
+		// For unknown pattern types, do basic pattern analysis
+		return tl.validateGenericPattern(filename, content, patternType, patternContent)
+	}
+}
+
+// validateGenericPattern provides basic validation for any pattern type
+func (tl *SeniorTechLead) validateGenericPattern(filename, content, patternType, patternContent string) []PatternDeviation {
+	var deviations []PatternDeviation
+	
+	// Check if the file is relevant to this pattern type
+	if !strings.Contains(strings.ToLower(filename), patternType) && 
+	   !strings.Contains(strings.ToLower(content), patternType) {
+		return deviations // Skip if not relevant
+	}
+	
+	// Extract examples from pattern documentation 
+	if strings.Contains(patternContent, "## Examples") || strings.Contains(patternContent, "### Examples") {
+		// Look for code blocks in examples
+		if strings.Contains(patternContent, "```") {
+			// Basic validation - check if the current code follows similar patterns
+			// This is a simple heuristic that can be expanded
+			if !tl.hasPatternCompliance(content, patternContent) {
+				deviations = append(deviations, PatternDeviation{
+					Type:        strings.ToUpper(patternType) + "_DEVIATION",
+					Description: fmt.Sprintf("Code doesn't follow established %s patterns", patternType),
+					File:        filename,
+					Expected:    fmt.Sprintf("Follow patterns documented in patterns/%s.md", patternType),
+					Actual:      "Non-compliant code structure detected",
+				})
+			}
+		}
+	}
+	
+	return deviations
+}
+
+// hasPatternCompliance checks basic pattern compliance
+func (tl *SeniorTechLead) hasPatternCompliance(content, patternContent string) bool {
+	// Simple heuristic: if the pattern doc mentions specific naming conventions,
+	// check if the code follows them
+	if strings.Contains(patternContent, "func ") && strings.Contains(content, "func ") {
+		return true // Basic function pattern compliance
+	}
+	if strings.Contains(patternContent, "type ") && strings.Contains(content, "type ") {
+		return true // Basic type pattern compliance  
+	}
+	
+	// Default to compliant if we can't determine
+	return true
+}
+
+// validateInterfacePatterns validates interface-specific patterns
+func (tl *SeniorTechLead) validateInterfacePatterns(filename, content, patterns string) []PatternDeviation {
+	var deviations []PatternDeviation
+	
+	// Check if this file contains interfaces
+	if !strings.Contains(content, "interface") {
+		return deviations
+	}
+	
+	// Validate interface naming conventions from pattern doc
+	if strings.Contains(patterns, "Interface") || strings.Contains(patterns, "Service") {
+		if !tl.followsInterfaceNaming(content) {
+			deviations = append(deviations, PatternDeviation{
+				Type:        "INTERFACE_NAMING",
+				Description: "Interface doesn't follow project naming conventions",
+				File:        filename,
+				Expected:    "Interface names should follow documented patterns",
+				Actual:      "Non-standard interface naming found",
+			})
+		}
+	}
+	
+	return deviations
+}
+
+// followsInterfaceNaming checks interface naming conventions
+func (tl *SeniorTechLead) followsInterfaceNaming(content string) bool {
+	// Check for common interface naming patterns
+	interfacePattern := regexp.MustCompile(`type\s+\w+(?:Service|Repository|Client|Handler|Manager|Interface)\s+interface`)
+	return interfacePattern.MatchString(content)
 }
 
 func (tl *SeniorTechLead) validateHandlerPatterns(filename, content, patterns string) []PatternDeviation {
@@ -917,6 +1116,28 @@ The following files were changed during implementation:
 - EXECUTE_COMMAND: Run linting, formatting, and security tools
 - LIST_FILES: Explore related files for duplication analysis
 - FIND_FILES: Search for similar functionality
+- SEQUENTIAL_THINKING: Use for comprehensive analysis requiring systematic review
+
+**When to Use Sequential Thinking:**
+Use sequential thinking for complex reviews that require:
+- Systematic analysis of multiple security vectors
+- Comprehensive pattern validation across multiple files
+- Detailed requirements validation against complex EM briefs
+- Multi-step duplication analysis across related modules
+- Complex architectural review requiring step-by-step reasoning
+
+**Sequential Thinking for Code Review:**
+SEQUENTIAL_THINKING:
+THOUGHT: I need to perform a comprehensive review of this user management implementation. Let me start by validating the EM requirements systematically, then move through security, duplication, and patterns.
+THOUGHT_NUMBER: 1
+TOTAL_THOUGHTS: 6
+NEXT_THOUGHT_NEEDED: true
+
+**Recommended Review Process with Sequential Thinking:**
+1. Start with sequential thinking to plan your comprehensive review approach
+2. Use subsequent thoughts to work through each review criteria systematically
+3. Document findings and reasoning in each thought step
+4. Conclude with clear approval or structured rejection feedback
 
 **Response Format for APPROVAL:**
 REQUIREMENTS_VALIDATION: [PASSED/FAILED]

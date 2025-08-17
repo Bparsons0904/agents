@@ -197,6 +197,11 @@ curl -X POST http://localhost:8080/call -H "Content-Type: application/json" -d '
 - **Docker Deployment**: Containerized services with health checks
 - **Configuration Management**: TOML-based agent and workflow configuration
 - **Error Recovery**: Enhanced iteration limits, timeout handling, intelligent error categorization
+- **Build Environment Optimization**: Enhanced Go commands, module management, and fallback strategies
+- **Web Search Integration**: DuckDuckGo API for agent self-correction and external knowledge
+- **Dynamic Pattern Discovery**: Automatic pattern scanning instead of hardcoded pattern lists
+- **Comprehensive Debugging System**: Agent thought and action logging to debug/ directory
+- **Sequential Thinking Integration**: Step-by-step reasoning tool for complex analysis
 
 ### Model Status
 
@@ -280,3 +285,5 @@ docker exec agent-ollama ollama list
 - Standard JSON-RPC format for tool calls
 - Designed for integration with Claude Code's MCP client
 
+
+- Use /home/bobparsons/Development/agents/test-projects for testing agents.

@@ -101,6 +101,7 @@ type ToolSet interface {
 	GetGitDiff() (string, error)
 	GetGitLog(limit int) (string, error)
 	SetWorkingDirectory(dir string)
+	GetWorkingDirectory() string
 	ListFiles(path string) ([]string, error)
 	FindFiles(pattern string, searchPath string) ([]string, error)
 	SearchForSolution(query string) (*tools.SearchResponse, error)

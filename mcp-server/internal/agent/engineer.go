@@ -151,9 +151,10 @@ func (se *SeniorEngineer) ImplementFeature(
 func (se *SeniorEngineer) attemptErrorRecovery(ctx context.Context, errorMsg string, attempts int) *ImplementFeatureResponse {
 	errorCategory := se.categorizeError(errorMsg)
 	
-	// Try recovery immediately for critical module issues, otherwise after 1st attempt
+	// Try recovery immediately for critical issues, otherwise after 1st attempt
 	criticalIssues := map[string]bool{
 		"missing_package": true,
+		"file_not_found":  true,
 	}
 	
 	if !criticalIssues[errorCategory] && attempts < 1 {
@@ -163,6 +164,11 @@ func (se *SeniorEngineer) attemptErrorRecovery(ctx context.Context, errorMsg str
 	log.Printf("Engineer: Attempting error recovery for category '%s' on attempt %d", errorCategory, attempts)
 	
 	switch errorCategory {
+	case "file_not_found":
+		if result := se.tryDirectorySetup(ctx, errorMsg); result != nil {
+			log.Printf("Engineer: Directory setup recovery succeeded")
+			return result
+		}
 	case "build_failure":
 		if result := se.tryBuildFallback(ctx, errorMsg); result != nil {
 			log.Printf("Engineer: Build fallback recovery succeeded")
@@ -182,6 +188,112 @@ func (se *SeniorEngineer) attemptErrorRecovery(ctx context.Context, errorMsg str
 	
 	log.Printf("Engineer: Error recovery failed for category '%s'", errorCategory)
 	return nil
+}
+
+// tryDirectorySetup attempts to create missing directories and set up basic project structure
+func (se *SeniorEngineer) tryDirectorySetup(ctx context.Context, errorMsg string) *ImplementFeatureResponse {
+	errorLower := strings.ToLower(errorMsg)
+	
+	// Extract directory path from error message
+	var targetDir string
+	if strings.Contains(errorLower, "chdir") && strings.Contains(errorLower, "no such file or directory") {
+		// Extract path from "chdir /path/to/dir: no such file or directory"
+		parts := strings.Split(errorMsg, "chdir ")
+		if len(parts) > 1 {
+			pathPart := strings.Split(parts[1], ":")
+			if len(pathPart) > 0 {
+				targetDir = strings.TrimSpace(pathPart[0])
+			}
+		}
+	} else if strings.Contains(errorLower, "failed to read directory") {
+		// Extract path from "failed to read directory: open /path/to/dir: no such file or directory"
+		parts := strings.Split(errorMsg, "open ")
+		if len(parts) > 1 {
+			pathPart := strings.Split(parts[1], ":")
+			if len(pathPart) > 0 {
+				targetDir = strings.TrimSpace(pathPart[0])
+			}
+		}
+	}
+	
+	if targetDir == "" {
+		return nil // Can't determine target directory
+	}
+	
+	log.Printf("Engineer: Attempting to create missing directory: %s", targetDir)
+	
+	// Create the directory
+	createCmd := fmt.Sprintf("mkdir -p %s", targetDir)
+	log.Printf("Engineer: Validating command: %s", createCmd)
+	
+	if err := se.restrictions.ValidateCommand(createCmd); err != nil {
+		log.Printf("Engineer: Command validation failed: %v", err)
+		return nil
+	}
+	
+	log.Printf("Engineer: Command validated successfully, executing...")
+	
+	// Save current working directory
+	currentWorkingDir := se.tools.GetWorkingDirectory()
+	log.Printf("Engineer: Current working directory: %s", currentWorkingDir)
+	
+	// Temporarily set working directory to a parent directory that exists
+	parentDir := "/app" // Use a directory we know exists
+	se.tools.SetWorkingDirectory(parentDir)
+	log.Printf("Engineer: Temporarily changed working directory to: %s", parentDir)
+	
+	output, err := se.tools.ExecuteCommand(createCmd)
+	if err != nil {
+		log.Printf("Engineer: Command execution failed: %v", err)
+		// Restore original working directory
+		se.tools.SetWorkingDirectory(currentWorkingDir)
+		return nil
+	}
+	
+	log.Printf("Engineer: mkdir command succeeded, setting working directory to created directory")
+	// Set working directory to the newly created directory
+	se.tools.SetWorkingDirectory(targetDir)
+	
+	log.Printf("Engineer: Directory created successfully, output: %s", output)
+	
+	// Check if this looks like a Go project and needs initialization
+	if strings.Contains(targetDir, "go") || strings.Contains(errorMsg, "go.mod") {
+		log.Printf("Engineer: Attempting Go module initialization...")
+		if err := se.restrictions.ValidateCommand("go mod init"); err == nil {
+			// Extract project name from directory path
+			parts := strings.Split(strings.Trim(targetDir, "/"), "/")
+			projectName := parts[len(parts)-1]
+			if projectName == "" {
+				projectName = "myproject"
+			}
+			
+			initCmd := fmt.Sprintf("go mod init %s", projectName)
+			if err := se.restrictions.ValidateCommand(initCmd); err == nil {
+				initOutput, initErr := se.tools.ExecuteCommand(initCmd)
+				if initErr == nil {
+					log.Printf("Engineer: Go module initialized successfully")
+					return &ImplementFeatureResponse{
+						Success:          true,
+						Message:          "Created directory and initialized Go module",
+						CommandsExecuted: []string{createCmd, initCmd},
+						BuildOutput:      output + "\n" + initOutput,
+					}
+				} else {
+					log.Printf("Engineer: Go module init failed: %v", initErr)
+				}
+			} else {
+				log.Printf("Engineer: Go module init command validation failed: %v", err)
+			}
+		}
+	}
+	
+	log.Printf("Engineer: Returning success for directory creation")
+	return &ImplementFeatureResponse{
+		Success:          true,
+		Message:          "Created missing directory",
+		CommandsExecuted: []string{createCmd},
+		BuildOutput:      output,
+	}
 }
 
 // tryBuildFallback attempts different build commands for common VCS/module issues
@@ -220,12 +332,38 @@ func (se *SeniorEngineer) tryBuildFallback(ctx context.Context, errorMsg string)
 	return nil
 }
 
-// tryModuleFix attempts to fix Go module issues
+// tryModuleFix attempts to fix Go module issues with context-aware solutions
 func (se *SeniorEngineer) tryModuleFix(ctx context.Context, errorMsg string) *ImplementFeatureResponse {
-	fixCommands := []string{
-		"go mod tidy",
-		"go mod download",
-		"go clean -modcache",
+	errorLower := strings.ToLower(errorMsg)
+	
+	// Check if go.mod exists first
+	if strings.Contains(errorLower, "missing module declaration") {
+		// First try to create go.mod if it doesn't exist
+		if err := se.restrictions.ValidateCommand("go mod init"); err == nil {
+			// Try to determine project name from current directory or use default
+			initCmd := "go mod init myproject"
+			output, err := se.tools.ExecuteCommand(initCmd)
+			if err == nil {
+				return &ImplementFeatureResponse{
+					Success:          true,
+					Message:          "Created missing go.mod file",
+					CommandsExecuted: []string{initCmd},
+					BuildOutput:      output,
+				}
+			}
+		}
+	}
+	
+	// Context-aware command selection
+	var fixCommands []string
+	
+	if strings.Contains(errorLower, "missing go.sum") || strings.Contains(errorLower, "checksum") {
+		fixCommands = []string{"go mod download", "go mod tidy"}
+	} else if strings.Contains(errorLower, "proxy") || strings.Contains(errorLower, "sumdb") {
+		fixCommands = []string{"go clean -modcache", "go mod download"}
+	} else {
+		// Default sequence
+		fixCommands = []string{"go mod tidy", "go mod download", "go clean -modcache"}
 	}
 	
 	for _, cmd := range fixCommands {
@@ -401,11 +539,11 @@ Success Criteria: %s
 %s
 
 **Your Responsibilities:**
-1. Analyze the requested feature and determine implementation approach
-2. Create or modify files to implement the feature
-3. Follow language-specific best practices and conventions
-4. Ensure code builds successfully
-5. Run basic tests to validate functionality
+1. **Setup**: Ensure working directory exists, create if needed (mkdir -p)
+2. **Project Initialization**: Set up project structure (go mod init, npm init, etc.)
+3. **Analysis**: Analyze the requested feature and determine implementation approach
+4. **Implementation**: Create or modify files to implement the feature
+5. **Validation**: Follow best practices, ensure code builds and runs correctly
 
 **Available Actions:**
 - READ_FILE: Read existing code files
@@ -414,6 +552,31 @@ Success Criteria: %s
 - GET_GIT_DIFF: Check current changes
 - LIST_FILES: List files and directories in a path
 - FIND_FILES: Search for files by name pattern
+- SEQUENTIAL_THINKING: Break down complex implementation into step-by-step thinking
+
+**When to Use Sequential Thinking:**
+Use sequential thinking for complex implementations that involve:
+- Setting up new projects from scratch
+- Multiple files that need to work together
+- Understanding existing patterns before implementation
+- Complex logic that requires careful reasoning
+- Debugging syntax errors or build failures
+- Planning implementation steps that depend on each other
+- When you encounter "no such file or directory" errors
+
+**Sequential Thinking Usage:**
+ACTION: SEQUENTIAL_THINKING
+THOUGHT: [Your current thinking step]
+THOUGHT_NUMBER: [Current step number]
+TOTAL_THOUGHTS: [Estimated total steps needed]
+NEXT_THOUGHT_NEEDED: [true/false]
+
+Example for complex feature implementation:
+ACTION: SEQUENTIAL_THINKING
+THOUGHT: I need to implement user management endpoints. Let me first understand the existing project structure and patterns by examining the current codebase.
+THOUGHT_NUMBER: 1
+TOTAL_THOUGHTS: 5
+NEXT_THOUGHT_NEEDED: true
 
 **Guidelines:**
 - Write clean, maintainable code
@@ -423,6 +586,9 @@ Success Criteria: %s
 - Ensure changes build without errors
 - **For Go projects: Remove unused imports, handle all declared variables**
 - **If you get "imported and not used" errors, remove the unused import**
+- **NEVER use compound commands with && or ;** - use single commands only
+- **NEVER use cd commands** - the working directory is already set correctly
+- **Run commands directly without path changes** (e.g., use "go mod init myproject" not "cd /path && go mod init myproject")
 - **If you are unable to fix a build error after an attempt, or if you believe you cannot complete the task, respond with a single line: ACTION: GIVE_UP**
 
 **Response Format:**
@@ -447,6 +613,14 @@ PATH: directory/path
 ACTION: FIND_FILES
 PATTERN: filename_pattern
 SEARCH_PATH: directory/to/search (optional)
+
+ACTION: SEQUENTIAL_THINKING
+THOUGHT: Your thinking step here
+THOUGHT_NUMBER: 1
+TOTAL_THOUGHTS: 3
+NEXT_THOUGHT_NEEDED: true
+
+**Start by using sequential thinking for complex features, then proceed with implementation actions.**
 
 Begin by following your implementation strategy and implementing the requested feature.`,
 		briefingSection,
@@ -659,6 +833,13 @@ func (se *SeniorEngineer) getBuildCommand(projectType ProjectType) string {
 // categorizeError categorizes errors into broad types to detect progress vs stuck patterns
 func (se *SeniorEngineer) categorizeError(errorMsg string) string {
 	errorLower := strings.ToLower(errorMsg)
+	
+	// Directory and file system issues - HIGH PRIORITY for auto-fix
+	if strings.Contains(errorLower, "no such file or directory") || 
+	   strings.Contains(errorLower, "failed to read directory") ||
+	   strings.Contains(errorLower, "chdir") && strings.Contains(errorLower, "no such file") {
+		return "file_not_found"
+	}
 	
 	// EM feedback indicators - these suggest broader issues that EM should address
 	if strings.Contains(errorLower, "approach") || strings.Contains(errorLower, "architecture") {

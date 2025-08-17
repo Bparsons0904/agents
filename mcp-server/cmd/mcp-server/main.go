@@ -24,6 +24,9 @@ type MCPServer struct {
 	orchestrator agent.WorkflowOrchestrator
 	workflowConfig *config.WorkflowConfig
 	
+	// Shared toolset for project initialization
+	toolSet      *tools.ToolSet
+	
 	workingDir   string
 }
 
@@ -91,6 +94,7 @@ func main() {
 		// Initialize single agent setup
 		llmClient := llm.NewOllamaClient(ollamaURL, cfg.Model)
 		toolSet := tools.NewToolSet(cfg.Commands, cfg.Restrictions, workingDir)
+		server.toolSet = toolSet
 		// Create a config for the single engineer agent
 		engineerConfig := config.WorkflowAgentConfig{
 			Role:          cfg.Agent.Role,
@@ -107,6 +111,7 @@ func main() {
 		
 		// Create shared toolset
 		toolSet := tools.NewToolSet(workflowConfig.Commands, workflowConfig.Restrictions, workingDir)
+		server.toolSet = toolSet
 		
 		// Create orchestrator
 		// Use default model from first agent config for LLM client
@@ -215,6 +220,80 @@ func (s *MCPServer) handleToolsRequest(w http.ResponseWriter, r *http.Request) {
 			},
 		}
 		tools = append(tools, workflowTool)
+		
+		// Add project initialization tool
+		initTool := MCPTool{
+			Name:        "initialize_project_patterns",
+			Description: "Analyze existing project and generate pattern documentation for agent coordination",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"project_path": map[string]interface{}{
+						"type":        "string",
+						"description": "Path to the project to analyze",
+					},
+					"output_path": map[string]interface{}{
+						"type":        "string",
+						"description": "Path where pattern documentation should be generated (optional, defaults to project_path)",
+					},
+				},
+				"required": []string{"project_path"},
+			},
+		}
+		tools = append(tools, initTool)
+		
+		// Add sequential thinking tool
+		sequentialThinkingTool := MCPTool{
+			Name:        "sequential_thinking",
+			Description: "A detailed tool for dynamic and reflective problem-solving through sequential thoughts. Helps break down complex problems into manageable steps with revision and branching capabilities.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"thought": map[string]interface{}{
+						"type":        "string",
+						"description": "Your current thinking step",
+					},
+					"nextThoughtNeeded": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether another thought step is needed",
+					},
+					"thoughtNumber": map[string]interface{}{
+						"type":        "integer",
+						"description": "Current thought number",
+						"minimum":     1,
+					},
+					"totalThoughts": map[string]interface{}{
+						"type":        "integer",
+						"description": "Estimated total thoughts needed",
+						"minimum":     1,
+					},
+					"isRevision": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether this revises previous thinking",
+					},
+					"revisesThought": map[string]interface{}{
+						"type":        "integer",
+						"description": "Which thought is being reconsidered",
+						"minimum":     1,
+					},
+					"branchFromThought": map[string]interface{}{
+						"type":        "integer",
+						"description": "Branching point thought number",
+						"minimum":     1,
+					},
+					"branchId": map[string]interface{}{
+						"type":        "string",
+						"description": "Branch identifier",
+					},
+					"needsMoreThoughts": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If more thoughts are needed",
+					},
+				},
+				"required": []string{"thought", "nextThoughtNeeded", "thoughtNumber", "totalThoughts"},
+			},
+		}
+		tools = append(tools, sequentialThinkingTool)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -242,6 +321,10 @@ func (s *MCPServer) handleToolCall(w http.ResponseWriter, r *http.Request) {
 		s.handleImplementFeature(w, r, req.Params.Arguments)
 	case "implement_feature_workflow":
 		s.handleImplementFeatureWorkflow(w, r, req.Params.Arguments)
+	case "initialize_project_patterns":
+		s.handleInitializeProjectPatterns(w, r, req.Params.Arguments)
+	case "sequential_thinking":
+		s.handleSequentialThinking(w, r, req.Params.Arguments)
 	default:
 		s.sendError(w, 404, "Tool not found")
 	}
@@ -320,6 +403,77 @@ func (s *MCPServer) handleImplementFeatureWorkflow(w http.ResponseWriter, r *htt
 	result, err := s.orchestrator.ExecuteWorkflow(r.Context(), workflowReq)
 	if err != nil {
 		s.sendError(w, 500, fmt.Sprintf("Workflow execution failed: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(MCPResponse{Result: result})
+}
+
+func (s *MCPServer) handleInitializeProjectPatterns(w http.ResponseWriter, r *http.Request, args map[string]interface{}) {
+	if s.toolSet == nil {
+		s.sendError(w, 503, "ToolSet not available")
+		return
+	}
+
+	// Parse project initialization request
+	var projectPath string
+	var outputPath string
+	
+	if path, ok := args["project_path"].(string); ok {
+		projectPath = path
+	} else {
+		s.sendError(w, 400, "Missing or invalid project_path")
+		return
+	}
+
+	if outPath, ok := args["output_path"].(string); ok {
+		outputPath = outPath
+	} else {
+		outputPath = projectPath // Default to project path
+	}
+
+	// Analyze project patterns
+	analysis, err := s.toolSet.AnalyzeProject(projectPath)
+	if err != nil {
+		s.sendError(w, 500, fmt.Sprintf("Project analysis failed: %v", err))
+		return
+	}
+
+	// Generate documentation
+	err = s.toolSet.GenerateProjectDocumentation(analysis, outputPath)
+	if err != nil {
+		s.sendError(w, 500, fmt.Sprintf("Documentation generation failed: %v", err))
+		return
+	}
+
+	// Return analysis results
+	result := map[string]interface{}{
+		"success":         true,
+		"project_path":    projectPath,
+		"output_path":     outputPath,
+		"analysis":        analysis,
+		"patterns_found":  len(analysis.Patterns),
+		"documentation_files": []string{
+			outputPath + "/PROJECT_PATTERNS.md",
+			outputPath + "/patterns/",
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(MCPResponse{Result: result})
+}
+
+func (s *MCPServer) handleSequentialThinking(w http.ResponseWriter, r *http.Request, args map[string]interface{}) {
+	if s.toolSet == nil {
+		s.sendError(w, 503, "ToolSet not available")
+		return
+	}
+
+	// Process the thought using the sequential thinking tool
+	result, err := s.toolSet.ProcessThought(args)
+	if err != nil {
+		s.sendError(w, 400, fmt.Sprintf("Sequential thinking failed: %v", err))
 		return
 	}
 

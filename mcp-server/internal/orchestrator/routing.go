@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"mcp-server/internal/agent"
@@ -11,6 +12,21 @@ type RoutingDecision struct {
 	NextAgent AgentRole
 	Reason    string
 	Priority  int // Higher priority takes precedence
+}
+
+type ErrorPattern struct {
+	Pattern     *regexp.Regexp
+	Category    string
+	Severity    int // 1=low, 2=medium, 3=high, 4=critical
+	Suggestions []string
+}
+
+type ErrorContext struct {
+	Category     string
+	Severity     int
+	Suggestions  []string
+	IsRecoverable bool
+	RequiresHelp  bool
 }
 
 type RoutingRule struct {
@@ -23,13 +39,141 @@ type RoutingRule struct {
 
 // RoutingEngine handles complex agent routing logic
 type RoutingEngine struct {
-	rules []RoutingRule
+	rules        []RoutingRule
+	errorPatterns []ErrorPattern
 }
 
 func NewRoutingEngine() *RoutingEngine {
 	re := &RoutingEngine{}
+	re.initializeErrorPatterns()
 	re.initializeRules()
 	return re
+}
+
+func (re *RoutingEngine) initializeErrorPatterns() {
+	re.errorPatterns = []ErrorPattern{
+		// Critical build errors
+		{
+			Pattern:  regexp.MustCompile(`(?i)(undefined:\s*\w+|undeclared name:\s*\w+|cannot find[\s\w]*:\s*\w+)`),
+			Category: "undefined_symbol",
+			Severity: 4,
+			Suggestions: []string{
+				"Check import statements",
+				"Verify function/variable names",
+				"Add missing declarations",
+			},
+		},
+		{
+			Pattern:  regexp.MustCompile(`(?i)(syntax error|unexpected \w+|expected \w+)`),
+			Category: "syntax_error",
+			Severity: 4,
+			Suggestions: []string{
+				"Check brackets, braces, and parentheses",
+				"Verify function signatures",
+				"Check for missing semicolons or commas",
+			},
+		},
+		{
+			Pattern:  regexp.MustCompile(`(?i)(import cycle|circular import|cyclic import)`),
+			Category: "import_cycle",
+			Severity: 3,
+			Suggestions: []string{
+				"Restructure package dependencies",
+				"Create interface abstraction",
+				"Move shared code to separate package",
+			},
+		},
+		
+		// Dependency and module errors
+		{
+			Pattern:  regexp.MustCompile(`(?i)(module\s+\w+\s+not found|no such file or directory|package \w+ is not in GOROOT)`),
+			Category: "missing_dependency",
+			Severity: 3,
+			Suggestions: []string{
+				"Run 'go mod tidy'",
+				"Add missing dependency with 'go get'",
+				"Check module path in go.mod",
+			},
+		},
+		{
+			Pattern:  regexp.MustCompile(`(?i)(permission denied|access denied|operation not permitted)`),
+			Category: "permission_error",
+			Severity: 3,
+			Suggestions: []string{
+				"Check file permissions",
+				"Verify write access to target directory",
+				"Run with appropriate privileges",
+			},
+		},
+		
+		// Test-related errors
+		{
+			Pattern:  regexp.MustCompile(`(?i)(test failed|assertion failed|panic: test timed out)`),
+			Category: "test_failure",
+			Severity: 2,
+			Suggestions: []string{
+				"Review test logic and assertions",
+				"Check test data and setup",
+				"Verify function behavior",
+			},
+		},
+		{
+			Pattern:  regexp.MustCompile(`(?i)(no tests to run|no test files|testing: warning: no tests to run)`),
+			Category: "no_tests",
+			Severity: 1,
+			Suggestions: []string{
+				"Create test files with *_test.go pattern",
+				"Add test functions starting with 'Test'",
+				"Check test file naming conventions",
+			},
+		},
+		
+		// Runtime and logic errors
+		{
+			Pattern:  regexp.MustCompile(`(?i)(panic:|runtime error|nil pointer dereference|index out of range)`),
+			Category: "runtime_error",
+			Severity: 4,
+			Suggestions: []string{
+				"Add nil checks",
+				"Validate array/slice bounds",
+				"Add error handling",
+			},
+		},
+		{
+			Pattern:  regexp.MustCompile(`(?i)(type \w+ has no field \w+|cannot use \w+ as \w+ value)`),
+			Category: "type_error",
+			Severity: 3,
+			Suggestions: []string{
+				"Check struct field names",
+				"Verify type compatibility",
+				"Add type conversions where needed",
+			},
+		},
+		
+		// Network and external service errors
+		{
+			Pattern:  regexp.MustCompile(`(?i)(connection refused|timeout|no route to host|dial tcp.*refused)`),
+			Category: "network_error",
+			Severity: 2,
+			Suggestions: []string{
+				"Check service availability",
+				"Verify network connectivity",
+				"Review endpoint URLs and ports",
+			},
+		},
+		
+		// Git and version control errors
+		{
+			Pattern:  regexp.MustCompile(`(?i)(fatal: not a git repository|git.*error|merge conflict)`),
+			Category: "git_error",
+			Severity: 2,
+			Suggestions: []string{
+				"Initialize git repository if needed",
+				"Resolve merge conflicts",
+				"Check git configuration",
+			},
+		},
+	}
 }
 
 func (re *RoutingEngine) initializeRules() {
@@ -82,20 +226,55 @@ func (re *RoutingEngine) initializeRules() {
 		{
 			FromAgent: AgentRoleEngineer,
 			Condition: func(result *agent.ImplementFeatureResponse) bool {
-				return !result.Success && re.isBuildError(result)
+				if result.Success {
+					return false
+				}
+				errorCtx := re.analyzeErrorContext(result)
+				return errorCtx.Category == "syntax_error" || errorCtx.Category == "undefined_symbol" || 
+					   errorCtx.Category == "type_error" || errorCtx.Category == "import_cycle"
 			},
-			NextAgent: AgentRoleEngineer, // Stay in Engineer to fix build
-			Reason:    "Build failed, fixing implementation",
+			NextAgent: AgentRoleEngineer, // Stay in Engineer to fix critical build issues
+			Reason:    "Critical build errors detected, continuing implementation fixes",
+			Priority:  18,
+		},
+		{
+			FromAgent: AgentRoleEngineer,
+			Condition: func(result *agent.ImplementFeatureResponse) bool {
+				if result.Success {
+					return false
+				}
+				errorCtx := re.analyzeErrorContext(result)
+				return errorCtx.Category == "missing_dependency" || errorCtx.Category == "permission_error"
+			},
+			NextAgent: AgentRoleEM,
+			Reason:    "Dependency or permission issues detected, need planning support",
 			Priority:  15,
 		},
 		{
 			FromAgent: AgentRoleEngineer,
 			Condition: func(result *agent.ImplementFeatureResponse) bool {
-				return !result.Success && re.isMissingDependency(result)
+				if result.Success {
+					return false
+				}
+				errorCtx := re.analyzeErrorContext(result)
+				return errorCtx.Category == "runtime_error" && errorCtx.Severity >= 3
+			},
+			NextAgent: AgentRoleEngineer, // Stay to fix runtime issues
+			Reason:    "Runtime errors detected, applying targeted fixes",
+			Priority:  16,
+		},
+		{
+			FromAgent: AgentRoleEngineer,
+			Condition: func(result *agent.ImplementFeatureResponse) bool {
+				if result.Success {
+					return false
+				}
+				errorCtx := re.analyzeErrorContext(result)
+				return errorCtx.Category == "network_error" || errorCtx.Category == "git_error"
 			},
 			NextAgent: AgentRoleEM,
-			Reason:    "Missing dependencies, need planning support",
-			Priority:  10,
+			Reason:    "External system issues detected, need guidance",
+			Priority:  12,
 		},
 		{
 			FromAgent: AgentRoleEngineer,
@@ -120,11 +299,28 @@ func (re *RoutingEngine) initializeRules() {
 		{
 			FromAgent: AgentRoleQA,
 			Condition: func(result *agent.ImplementFeatureResponse) bool {
-				return !result.Success && re.isTestFailure(result)
+				if result.Success {
+					return false
+				}
+				errorCtx := re.analyzeErrorContext(result)
+				return errorCtx.Category == "test_failure" && errorCtx.Severity >= 2
 			},
 			NextAgent: AgentRoleEngineer,
-			Reason:    "Tests found implementation bugs, needs fixes",
-			Priority:  15,
+			Reason:    "Significant test failures found, implementation needs fixes",
+			Priority:  17,
+		},
+		{
+			FromAgent: AgentRoleQA,
+			Condition: func(result *agent.ImplementFeatureResponse) bool {
+				if result.Success {
+					return false
+				}
+				errorCtx := re.analyzeErrorContext(result)
+				return errorCtx.Category == "no_tests" || errorCtx.Severity <= 1
+			},
+			NextAgent: AgentRoleQA, // Stay to create proper tests
+			Reason:    "Missing or insufficient tests, continuing test development",
+			Priority:  10,
 		},
 		{
 			FromAgent: AgentRoleQA,
@@ -219,6 +415,59 @@ func (re *RoutingEngine) RouteAgent(currentAgent AgentRole, result *agent.Implem
 	return bestDecision.NextAgent, bestDecision.Reason, nil
 }
 
+// Enhanced error analysis for smarter routing decisions
+func (re *RoutingEngine) analyzeErrorContext(result *agent.ImplementFeatureResponse) ErrorContext {
+	errorText := strings.ToLower(result.Error + " " + result.BuildOutput + " " + result.Message)
+	
+	// Find the most severe matching pattern
+	var bestMatch *ErrorPattern
+	for _, pattern := range re.errorPatterns {
+		if pattern.Pattern.MatchString(errorText) {
+			if bestMatch == nil || pattern.Severity > bestMatch.Severity {
+				bestMatch = &pattern
+			}
+		}
+	}
+	
+	if bestMatch == nil {
+		// Default context for unmatched errors
+		return ErrorContext{
+			Category:     "unknown",
+			Severity:     2,
+			Suggestions:  []string{"Review error logs", "Check implementation logic"},
+			IsRecoverable: true,
+			RequiresHelp:  false,
+		}
+	}
+	
+	// Determine recoverability and help requirements based on category and severity
+	isRecoverable := bestMatch.Severity <= 3
+	requiresHelp := bestMatch.Severity >= 3 && 
+		(bestMatch.Category == "missing_dependency" || 
+		 bestMatch.Category == "permission_error" ||
+		 bestMatch.Category == "network_error")
+	
+	return ErrorContext{
+		Category:     bestMatch.Category,
+		Severity:     bestMatch.Severity,
+		Suggestions:  bestMatch.Suggestions,
+		IsRecoverable: isRecoverable,
+		RequiresHelp:  requiresHelp,
+	}
+}
+
+// GetErrorSuggestions provides contextual suggestions for error resolution
+func (re *RoutingEngine) GetErrorSuggestions(result *agent.ImplementFeatureResponse) []string {
+	errorCtx := re.analyzeErrorContext(result)
+	return errorCtx.Suggestions
+}
+
+// IsErrorRecoverable determines if an error can be recovered from without external help
+func (re *RoutingEngine) IsErrorRecoverable(result *agent.ImplementFeatureResponse) bool {
+	errorCtx := re.analyzeErrorContext(result)
+	return errorCtx.IsRecoverable
+}
+
 // Helper functions to analyze agent results
 
 func (re *RoutingEngine) isBuildError(result *agent.ImplementFeatureResponse) bool {
@@ -226,15 +475,15 @@ func (re *RoutingEngine) isBuildError(result *agent.ImplementFeatureResponse) bo
 		return false
 	}
 	
-	errorText := strings.ToLower(result.Error + " " + result.BuildOutput)
-	buildErrors := []string{
-		"build failed", "compilation error", "compile error",
-		"syntax error", "undefined:", "not declared",
-		"missing package", "import error", "cannot find",
+	// Use enhanced error analysis for more accurate detection
+	errorCtx := re.analyzeErrorContext(result)
+	buildCategories := []string{
+		"syntax_error", "undefined_symbol", "type_error", 
+		"import_cycle", "missing_dependency",
 	}
 	
-	for _, pattern := range buildErrors {
-		if strings.Contains(errorText, pattern) {
+	for _, category := range buildCategories {
+		if errorCtx.Category == category {
 			return true
 		}
 	}
@@ -247,20 +496,9 @@ func (re *RoutingEngine) isMissingDependency(result *agent.ImplementFeatureRespo
 		return false
 	}
 	
-	errorText := strings.ToLower(result.Error)
-	dependencyErrors := []string{
-		"missing dependency", "package not found", "module not found",
-		"cannot find module", "no such file or directory",
-		"import path does not exist",
-	}
-	
-	for _, pattern := range dependencyErrors {
-		if strings.Contains(errorText, pattern) {
-			return true
-		}
-	}
-	
-	return false
+	// Use enhanced error analysis for more accurate detection
+	errorCtx := re.analyzeErrorContext(result)
+	return errorCtx.Category == "missing_dependency"
 }
 
 func (re *RoutingEngine) hasTestsAdded(result *agent.ImplementFeatureResponse) bool {
@@ -292,20 +530,9 @@ func (re *RoutingEngine) isTestFailure(result *agent.ImplementFeatureResponse) b
 		return false
 	}
 	
-	errorText := strings.ToLower(result.Error + " " + result.BuildOutput)
-	testFailures := []string{
-		"test failed", "assertion failed", "assertion error",
-		"expected", "actual", "test failure", "failed test",
-		"tests failed", "spec failed",
-	}
-	
-	for _, pattern := range testFailures {
-		if strings.Contains(errorText, pattern) {
-			return true
-		}
-	}
-	
-	return false
+	// Use enhanced error analysis for more accurate detection
+	errorCtx := re.analyzeErrorContext(result)
+	return errorCtx.Category == "test_failure"
 }
 
 func (re *RoutingEngine) isNonTestableCode(result *agent.ImplementFeatureResponse) bool {

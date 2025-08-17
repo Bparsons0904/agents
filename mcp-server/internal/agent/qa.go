@@ -230,6 +230,22 @@ LOW PRIORITY - Skip Unless Trivial:
 - READ_FILE: Read existing test files to understand patterns
 - WRITE_FILE: Create new test files
 - EXECUTE_COMMAND: Run test commands (MANDATORY before completion)
+- SEQUENTIAL_THINKING: Use for complex test analysis and planning
+
+**When to Use Sequential Thinking:**
+Use sequential thinking when:
+- Analyzing complex implementations with multiple components
+- Planning comprehensive test coverage for intricate features
+- Debugging test failures or understanding implementation issues
+- Determining critical paths and edge cases systematically
+- Breaking down testing strategy for complex business logic
+
+**Sequential Thinking for Testing:**
+SEQUENTIAL_THINKING:
+THOUGHT: I need to analyze this user management implementation to identify the most critical test cases. Let me start by understanding what functionality was implemented.
+THOUGHT_NUMBER: 1
+TOTAL_THOUGHTS: 4
+NEXT_THOUGHT_NEEDED: true
 
 **Response Format:**
 CRITICAL_ANALYSIS:

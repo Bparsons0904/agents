@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"mcp-server/internal/debug"
 	"strings"
-	"time"
 )
 
 type EngineeringManager struct {
@@ -25,93 +24,31 @@ func NewEngineeringManager(llmClient LLMClient, tools ToolSet, restrictions Comm
 }
 
 func (em *EngineeringManager) ImplementFeature(ctx context.Context, req ImplementFeatureRequest) (*ImplementFeatureResponse, error) {
-	// Debug: Log what the EM is thinking about
-	em.debugLogger.LogThought(debug.AgentThought{
-		Timestamp:   time.Now(),
-		Agent:       "EngineeringManager",
-		Phase:       "feature_analysis",
-		Task:        req.Description,
-		Context:     fmt.Sprintf("Working Directory: %s, Project Type: %s", req.WorkingDirectory, req.ProjectType),
-		Thinking:    "I need to analyze this feature request, understand the project context, and create a detailed implementation plan for the Senior Engineer. Let me gather project information and examine existing patterns.",
-		PlanOfAction: "1. Set working directory\n2. Gather project context (files, git status, patterns)\n3. Analyze feature requirements\n4. Create structured briefing for engineer\n5. Execute any necessary setup commands",
-	})
-
-	// Step 1: Set working directory if specified
+	// Set working directory if specified
 	if req.WorkingDirectory != "" {
 		em.tools.SetWorkingDirectory(req.WorkingDirectory)
-		em.debugLogger.LogAction(debug.AgentAction{
-			Timestamp:  time.Now(),
-			Agent:      "EngineeringManager",
-			ActionType: "set_working_directory",
-			FilePath:   req.WorkingDirectory,
-			Result:     "Working directory set",
-			Success:    true,
-		})
 	}
 
-	// Step 2: Gather comprehensive project context
-	em.debugLogger.LogThought(debug.AgentThought{
-		Timestamp:   time.Now(),
-		Agent:       "EngineeringManager",
-		Phase:       "context_gathering",
-		Task:        "Project Analysis",
-		Thinking:    "Now I need to understand the current project structure, examine existing files, check git status, and identify patterns the engineer should follow.",
-		PlanOfAction: "Scan project files, analyze existing code patterns, check git history for context",
-	})
-
+	// Get minimal project context
 	context, err := em.gatherProjectContext()
 	if err != nil {
-		em.debugLogger.LogError("EngineeringManager", "context_gathering", err, "Failed to gather project context")
 		return &ImplementFeatureResponse{
 			Success: false,
 			Error:   fmt.Sprintf("Failed to gather project context: %v", err),
 		}, nil
 	}
 
-	contextSize := len(context.GitStatus) + len(context.GitLog) + len(context.ClaudeMd) + len(context.AgentsMd) + len(context.ProjectStructure)
-	for _, content := range context.ExistingFiles {
-		contextSize += len(content)
-	}
-	em.debugLogger.LogAction(debug.AgentAction{
-		Timestamp:  time.Now(),
-		Agent:      "EngineeringManager",
-		ActionType: "gather_context",
-		Result:     fmt.Sprintf("Gathered project context: %d characters, %d files", contextSize, len(context.ExistingFiles)),
-		Success:    true,
-	})
-
-	// Step 3: Build system prompt with all context
-	em.debugLogger.LogThought(debug.AgentThought{
-		Timestamp:   time.Now(),
-		Agent:       "EngineeringManager",
-		Phase:       "plan_creation",
-		Task:        "Creating Implementation Plan",
-		Thinking:    "Based on the project context and feature requirements, I need to create a detailed, structured plan that guides the Senior Engineer. This should include specific files to examine, implementation approach, potential issues, and success criteria.",
-		PlanOfAction: "Generate comprehensive briefing with task breakdown, context, file guidance, and implementation strategy",
-	})
-
+	// Generate simple task for engineer
 	prompt := em.buildSystemPrompt(req, context)
-
-	// Step 4: Generate implementation plan from LLM
 	response, err := em.llmClient.Generate(ctx, prompt)
 	if err != nil {
-		em.debugLogger.LogError("EngineeringManager", "llm_generation", err, "LLM generation failed")
 		return &ImplementFeatureResponse{
 			Success: false,
 			Error:   fmt.Sprintf("LLM generation failed: %v", err),
 		}, nil
 	}
 
-	em.debugLogger.LogAction(debug.AgentAction{
-		Timestamp:  time.Now(),
-		Agent:      "EngineeringManager",
-		ActionType: "llm_generation",
-		Content:    truncateString(response, 500),
-		Result:     "Generated implementation plan",
-		Success:    true,
-	})
-
-	// Step 5: Parse and validate the plan
+	// Execute any setup commands and pass task to engineer
 	return em.processManagerResponse(ctx, req, response, context)
 }
 
@@ -129,43 +66,15 @@ func (em *EngineeringManager) gatherProjectContext() (*ProjectContext, error) {
 		ExistingFiles: make(map[string]string),
 	}
 
-	// Get git status
-	if gitStatus, err := em.tools.GetGitStatus(); err == nil {
-		ctx.GitStatus = gitStatus
-	} else {
-		ctx.GitStatus = "No git repository detected"
-	}
-
-	// Get git diff to understand current changes
-	if gitDiff, err := em.tools.GetGitDiff(); err == nil {
-		ctx.GitLog = gitDiff
-	}
-
-	// Read project documentation
-	if claudeMd, err := em.tools.ReadFile("CLAUDE.md"); err == nil {
-		ctx.ClaudeMd = claudeMd
-	}
-
-	// Try both locations for AGENTS.md (new structure first, then fallback)
-	if agentsMd, err := em.tools.ReadFile("agents/AGENTS.md"); err == nil {
-		ctx.AgentsMd = agentsMd
-	} else if agentsMd, err := em.tools.ReadFile("AGENTS.md"); err == nil {
-		ctx.AgentsMd = agentsMd
-	}
-
+	// Just get basic project info - let the engineer discover the rest
 	if projectStructure, err := em.tools.ReadFile("PROJECT-STRUCTURE.md"); err == nil {
 		ctx.ProjectStructure = projectStructure
-	}
-
-	// Read common project files for context
-	commonFiles := []string{
-		"README.md", "go.mod", "package.json", "requirements.txt",
-		"Dockerfile", "docker-compose.yml", ".gitignore",
-	}
-
-	for _, file := range commonFiles {
-		if content, err := em.tools.ReadFile(file); err == nil {
-			ctx.ExistingFiles[file] = content
+	} else {
+		// List current directory to understand project state
+		if files, err := em.tools.ListFiles("."); err == nil {
+			ctx.ProjectStructure = fmt.Sprintf("Current directory contents: %v", files)
+		} else {
+			ctx.ProjectStructure = "Empty or new project directory"
 		}
 	}
 
@@ -173,150 +82,36 @@ func (em *EngineeringManager) gatherProjectContext() (*ProjectContext, error) {
 }
 
 func (em *EngineeringManager) buildSystemPrompt(req ImplementFeatureRequest, context *ProjectContext) string {
-	agentsMdContent := context.AgentsMd
-	if agentsMdContent == "" {
-		agentsMdContent = "No AGENTS.md file found. This file should be created to document project standards and learnings."
-	}
-
-	// Check if this is a feedback/replanning scenario
+	// Check if this is a feedback scenario
 	isFeedbackScenario := strings.Contains(strings.ToLower(req.Description), "feedback") ||
 		strings.Contains(strings.ToLower(req.Description), "failed") ||
 		strings.Contains(strings.ToLower(req.Description), "error") ||
 		strings.Contains(strings.ToLower(req.Description), "issue")
 
 	if isFeedbackScenario {
-		return fmt.Sprintf(`You are the Engineering Manager handling feedback from the development workflow.
+		return fmt.Sprintf(`You are the Engineering Manager handling engineer feedback.
 
-**Your Role:**
-1. **Problem Analysis:** Review the feedback/issue and determine root cause
-2. **Project Cleanup:** Clean up any project conflicts or organizational issues
-3. **Replanning:** Provide a revised, more specific task for the Senior Engineer
-4. **Context Integration:** Use project knowledge to avoid known pitfalls
+**Your Job:** Give the engineer a clearer, simpler task based on the feedback.
 
-**Available Tools for Project Management:**
-- EXECUTE_COMMAND: Clean up files, create directories, manage project structure
-- WRITE_FILE: Create project setup files (go.mod, package.json, etc.)
-- READ_FILE: Analyze existing project structure
-
-**Common Project Issues & Solutions:**
-- Package conflicts: Clean up conflicting files, create isolated directories
-- Build failures: Initialize proper project structure (go mod init, npm init)
-- File conflicts: Remove conflicting files, organize into proper structure
-- Directory issues: Create proper project hierarchy
-
-**Feedback/Issue:** %s
-
-**Project Knowledge (from AGENTS.md):**
-%s
-
-**Project Structure:**
-%s
-
-**Current Git Status:**
-%s
-
-**Your Task:**
-1. **FIRST:** Analyze if project cleanup is needed (package conflicts, file organization)
-2. **THEN:** Create a revised structured brief for the Senior Engineer
-
-If project cleanup is needed, use EXECUTE_COMMAND actions to:
-- Remove conflicting files
-- Create proper directory structure  
-- Initialize project files (go.mod, etc.)
-- Organize files into appropriate locations
-
-**REVISED IMPLEMENTATION BRIEF FORMAT:**
-Your TASK response must follow this structured format to provide clear guidance to the Senior Engineer:
-
-TASK: [One clear sentence describing what to implement]
-CONTEXT: [Key project patterns/architecture the engineer should know]
-FILES_TO_EXAMINE: [Specific files to read for patterns/examples, comma-separated]
-IMPLEMENTATION_APPROACH: [Revised technical approach based on feedback analysis]
-POTENTIAL_ISSUES: [Known pitfalls or challenges to watch for, including lessons from the failure, comma-separated]
-SUCCESS_CRITERIA: [How to verify the implementation works]
+**Feedback:** %s
 
 **Response Format:**
-If cleanup needed:
-ACTION: EXECUTE_COMMAND
-COMMAND: [cleanup command]
+TASK: [Tell the engineer exactly what to build in one simple sentence. The engineer will handle any setup needed.]
 
-ACTION: WRITE_FILE  
-PATH: [project setup file]
-CONTENT: [file content]
-
-TASK: [Your revised structured implementation brief addressing the feedback]
-
-If no cleanup needed:
-TASK: [Your revised structured implementation brief addressing the feedback]`, req.Description, agentsMdContent, context.ProjectStructure, context.GitStatus)
+Keep it simple. The engineer will figure out the implementation details and any setup needed.`, req.Description)
 	}
 
-	// Initial briefing scenario
-	return fmt.Sprintf(`You are the Engineering Manager briefing the development team.
-
-**Your Role:**
-1. **Project Setup:** Ensure proper project structure and organization
-2. **Requirements Analysis:** Break down the user request into clear, actionable tasks
-3. **Context Integration:** Incorporate relevant project knowledge and patterns
-4. **Technical Guidance:** Provide high-level direction without micromanaging
-5. **Documentation Maintenance:** Create/update PROJECT-STRUCTURE.md as projects evolve
-
-**Available Tools for Project Management:**
-- EXECUTE_COMMAND: Set up project structure, create directories, initialize projects
-- WRITE_FILE: Create project setup files (go.mod, package.json, README, etc.)
-- READ_FILE: Analyze existing project structure
+	// Normal scenario - just tell the engineer what to build
+	return fmt.Sprintf(`You are the Engineering Manager giving a task to your Senior Engineer.
 
 **User Request:** %s
 
-**Project Knowledge (from AGENTS.md):**
-%s
-
-**Project Structure:**
-%s
-
-**Current Project State:**
-%s
-
-**Your Task:**
-1. **FIRST:** Determine if project setup is needed for this task
-2. **THEN:** Create a structured implementation brief for the Senior Engineer
-
-For new features, consider:
-- Does this need a new subdirectory to avoid conflicts?
-- Does this require project initialization (go mod init, npm init)?
-- Should this be organized in a specific way?
-- Should PROJECT-STRUCTURE.md be created/updated to help other agents understand the layout?
-
-**IMPLEMENTATION BRIEF FORMAT:**
-Your TASK response must follow this structured format to provide clear guidance to the Senior Engineer:
-
-TASK: [One clear sentence describing what to implement]
-CONTEXT: [Key project patterns/architecture the engineer should know]
-FILES_TO_EXAMINE: [Specific files to read for patterns/examples, comma-separated]
-IMPLEMENTATION_APPROACH: [Suggested technical approach based on project analysis]
-POTENTIAL_ISSUES: [Known pitfalls or challenges to watch for, comma-separated]
-SUCCESS_CRITERIA: [How to verify the implementation works]
+**Your Job:** Tell the engineer exactly what to build
 
 **Response Format:**
-If project setup needed:
-ACTION: EXECUTE_COMMAND
-COMMAND: [setup command - mkdir, go mod init, etc.]
+TASK: [Tell the engineer exactly what to build in one simple sentence. The engineer will handle any setup needed.]
 
-ACTION: WRITE_FILE
-PATH: [project file if needed]
-CONTENT: [file content]
-
-TASK: [Your structured implementation brief following the format above]
-
-If no setup needed:
-TASK: [Your structured implementation brief following the format above]
-
-**Example Brief Format:**
-TASK: Create a REST API endpoint for user authentication
-CONTEXT: This project uses Go Fiber framework with middleware-based routing
-FILES_TO_EXAMINE: handlers/auth.go, middleware/cors.go, main.go
-IMPLEMENTATION_APPROACH: Create new handler in handlers/ directory, add route to main.go, follow existing error handling patterns
-POTENTIAL_ISSUES: Ensure proper CORS configuration, validate input parameters, handle database connection errors
-SUCCESS_CRITERIA: Endpoint responds to POST /auth/login with proper JSON response and status codes`, req.Description, agentsMdContent, context.ProjectStructure, context.GitStatus)
+Keep it simple. The engineer will figure out the implementation details and any project setup.`, req.Description)
 }
 
 func (em *EngineeringManager) processManagerResponse(ctx context.Context, req ImplementFeatureRequest, llmResponse string, projectCtx *ProjectContext) (*ImplementFeatureResponse, error) {
@@ -325,112 +120,15 @@ func (em *EngineeringManager) processManagerResponse(ctx context.Context, req Im
 		FilesModified:    []string{},
 		CommandsExecuted: []string{},
 		BuildOutput:      "",
-		Message:          "Project setup and briefing completed",
+		Message:          "Task assigned to engineer",
 	}
 
-	// If AGENTS.md doesn't exist, create it in the new location
-	if projectCtx.AgentsMd == "" {
-		initialContent := "# Agent Knowledge Base\n\nThis file is managed by the Engineering Manager agent to maintain context and learnings between tasks.\n"
-		err := em.tools.WriteFile("agents/AGENTS.md", initialContent)
-		if err != nil {
-			// Log the error but don't fail the whole process
-			fmt.Printf("Error creating agents/AGENTS.md: %v\n", err)
-		} else {
-			result.FilesModified = append(result.FilesModified, "agents/AGENTS.md")
-		}
-	}
-
-	// Parse and execute any actions from the LLM response
-	actions := em.parseActions(llmResponse)
-	for _, action := range actions {
-		switch action.Type {
-		case "EXECUTE_COMMAND":
-			if err := em.restrictions.ValidateCommand(action.Command); err != nil {
-				result.Success = false
-				result.Error = fmt.Sprintf("Command validation failed: %v", err)
-				return result, nil
-			}
-
-			output, err := em.tools.ExecuteCommand(action.Command)
-			result.CommandsExecuted = append(result.CommandsExecuted, action.Command)
-			result.BuildOutput += fmt.Sprintf("EM Command: %s\nOutput: %s\n", action.Command, output)
-			
-			if err != nil {
-				// Log but don't fail - some setup commands may fail if already done
-				result.BuildOutput += fmt.Sprintf("Command warning: %v\n", err)
-			}
-
-		case "WRITE_FILE":
-			err := em.tools.WriteFile(action.Path, action.Content)
-			if err != nil {
-				result.Success = false
-				result.Error = fmt.Sprintf("Failed to write setup file %s: %v", action.Path, err)
-				return result, nil
-			}
-			result.FilesModified = append(result.FilesModified, action.Path)
-		}
-	}
-
-	// Extract the task description from the LLM response
+	// Extract the task description and pass it to the engineer
 	taskDescription := em.extractTaskDescription(llmResponse)
-	
-	result.NextSteps = taskDescription // The orchestrator will use this as the input for the next agent.
+	result.NextSteps = taskDescription
 	return result, nil
 }
 
-// Helper method to parse actions from LLM response (similar to engineer's parseActions)
-func (em *EngineeringManager) parseActions(response string) []Action {
-	var actions []Action
-	lines := strings.Split(response, "\n")
-	
-	var currentAction *Action
-	var inContent bool
-	var contentBuilder strings.Builder
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		if strings.HasPrefix(line, "ACTION:") {
-			// Save previous action
-			if currentAction != nil {
-				if inContent {
-					currentAction.Content = strings.TrimSpace(contentBuilder.String())
-				}
-				actions = append(actions, *currentAction)
-			}
-
-			// Start new action
-			actionType := strings.TrimSpace(strings.TrimPrefix(line, "ACTION:"))
-			currentAction = &Action{Type: actionType}
-			inContent = false
-			contentBuilder.Reset()
-		} else if currentAction != nil {
-			if strings.HasPrefix(line, "PATH:") {
-				currentAction.Path = strings.TrimSpace(strings.TrimPrefix(line, "PATH:"))
-			} else if strings.HasPrefix(line, "COMMAND:") {
-				currentAction.Command = strings.TrimSpace(strings.TrimPrefix(line, "COMMAND:"))
-			} else if strings.HasPrefix(line, "CONTENT:") {
-				inContent = true
-				contentBuilder.Reset()
-			} else if inContent && !strings.HasPrefix(line, "```") {
-				if contentBuilder.Len() > 0 {
-					contentBuilder.WriteString("\n")
-				}
-				contentBuilder.WriteString(line)
-			}
-		}
-	}
-
-	// Save final action
-	if currentAction != nil {
-		if inContent {
-			currentAction.Content = strings.TrimSpace(contentBuilder.String())
-		}
-		actions = append(actions, *currentAction)
-	}
-
-	return actions
-}
 
 // Helper method to extract task description, handling both action-based and simple responses
 func (em *EngineeringManager) extractTaskDescription(llmResponse string) string {
