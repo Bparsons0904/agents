@@ -1,1 +1,4 @@
 test-projects/
+*.json
+*-test.json
+*test*.json
