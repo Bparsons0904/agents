@@ -4,25 +4,25 @@ timeout_minutes = 20
 
 [agents.engineering_manager]
 role = "engineering_manager"
-model = "qwen3:14b-q4_K_M"
+model = "qwen2.5-coder:14b-instruct-q6_K"
 max_iterations = 4
 tools = ["read_file", "write_file", "execute_command", "git_status", "git_log", "git_diff", "list_files", "find_files", "sequential_thinking"]
 
 [agents.senior_engineer]
 role = "senior_engineer" 
-model = "qwen3:14b-q4_K_M"
+model = "qwen2.5-coder:14b-instruct-q6_K"
 max_iterations = 5
 tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files", "sequential_thinking"]
 
 [agents.senior_qa]
 role = "senior_qa"
-model = "qwen3:14b-q4_K_M" 
+model = "qwen2.5-coder:14b-instruct-q6_K" 
 max_iterations = 2
 tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files", "sequential_thinking"]
 
 [agents.senior_tech_lead]
 role = "senior_tech_lead"
-model = "qwen3:14b-q4_K_M"
+model = "qwen2.5-coder:14b-instruct-q6_K"
 max_iterations = 3
 tools = ["read_file", "write_file", "execute_command", "git_diff", "list_files", "find_files", "sequential_thinking"]
 

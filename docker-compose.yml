@@ -32,7 +32,7 @@ services:
       dockerfile: Dockerfile
     container_name: agent-mcp-server
     ports:
-      - "0.0.0.0:8080:8080" # MCP server API port - accessible on all interfaces
+      - "0.0.0.0:8765:8765" # MCP server API port - accessible on all interfaces
     volumes:
       - ./projects:/app/projects # Mount projects directory
       - ./test-projects:/app/test-projects # Mount test projects directory  
@@ -41,7 +41,7 @@ services:
     environment:
       - OLLAMA_URL=http://ollama:11434
       - PROJECT_ROOT=/app/projects
-      - PORT=8080
+      - PORT=8765
       - AGENT_DEBUG=true
       - AGENT_DEBUG_DIR=/app/debug-logs
       - AGENT_DEBUG_VERBOSE=true
@@ -49,7 +49,7 @@ services:
       - ollama
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
       interval: 30s
       timeout: 10s
       retries: 3
